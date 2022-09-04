@@ -69,17 +69,32 @@ impl PatcherApp {
     }
 
     pub fn central_panel(&mut self, ui: &mut egui::Ui) {
-        self.progress_panel(ui);
-        self.links_panel(ui);
+        self.bottom_panel(ui);
     }
 
-    fn links_panel(&self, ui: &mut egui::Ui) {
-        egui::TopBottomPanel::bottom("links_panel")
+    fn bottom_panel(&mut self, ui: &mut egui::Ui) {
+        egui::TopBottomPanel::bottom("bottom_panel")
             .frame(
                 egui::Frame::none()
                     .fill(self.link_bar_color)
-                    .inner_margin(15.),
+                    .rounding(egui::Rounding {
+                        nw: 0.,
+                        ne: 0.,
+                        sw: 25.,
+                        se: 25.,
+                    }),
             )
+            .resizable(false)
+            .min_height(175.)
+            .show_inside(ui, |ui| {
+                self.progress_panel(ui);
+                self.links_panel(ui);
+            });
+    }
+
+    fn links_panel(&self, ui: &mut egui::Ui) {
+        egui::TopBottomPanel::top("links_panel")
+            .frame(egui::Frame::none().inner_margin(15.))
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.style_mut().text_styles = [(
@@ -97,39 +112,21 @@ impl PatcherApp {
     }
 
     fn progress_panel(&mut self, ui: &mut egui::Ui) {
-        // Make progress panel touch above link panel
-        ui.spacing_mut().item_spacing = Vec2 { x: 0., y: -0.444 };
-        let rounding = 25.;
-        egui::TopBottomPanel::bottom("progress_panel_outer")
+        egui::TopBottomPanel::bottom("progress_panel_inner")
             .resizable(false)
             .min_height(110.)
             .frame(
                 egui::Frame::none()
-                    .fill(self.link_bar_color)
-                    .rounding(egui::Rounding {
-                        nw: 0.,
-                        ne: 0.,
-                        sw: rounding,
-                        se: rounding,
-                    }),
+                    .fill(egui::Color32::LIGHT_GRAY)
+                    .outer_margin(egui::style::Margin::same(0.))
+                    .inner_margin(egui::style::Margin::same(15.))
+                    .rounding(egui::Rounding::same(25.)),
             )
             .show_inside(ui, |ui| {
-                egui::TopBottomPanel::bottom("progress_panel_inner")
-                    .resizable(false)
-                    .min_height(110.)
-                    .frame(
-                        egui::Frame::none()
-                            .fill(egui::Color32::LIGHT_GRAY)
-                            .outer_margin(egui::style::Margin::same(0.))
-                            .inner_margin(egui::style::Margin::same(15.))
-                            .rounding(egui::Rounding::same(rounding)),
-                    )
-                    .show_inside(ui, |ui| {
-                        ui.centered_and_justified(|ui| {
-                            self.play_button_panel(ui);
-                            self.patch_progress_bar(ui);
-                        });
-                    });
+                ui.centered_and_justified(|ui| {
+                    self.play_button_panel(ui);
+                    self.patch_progress_bar(ui);
+                });
             });
     }
 
