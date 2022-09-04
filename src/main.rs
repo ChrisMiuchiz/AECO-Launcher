@@ -15,6 +15,8 @@ fn load_image_from_memory(image_data: &[u8]) -> Result<egui::ColorImage, image::
 struct PatcherApp {
     background_handle: Option<egui::TextureHandle>,
     link_bar_color: egui::Color32,
+    username: String,
+    password: String,
 }
 
 impl PatcherApp {
@@ -22,6 +24,8 @@ impl PatcherApp {
         PatcherApp {
             background_handle: None,
             link_bar_color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 240),
+            username: String::new(),
+            password: String::new(),
         }
     }
 
@@ -70,6 +74,44 @@ impl PatcherApp {
 
     pub fn central_panel(&mut self, ui: &mut egui::Ui) {
         self.bottom_panel(ui);
+        self.login_panel(ui);
+    }
+
+    fn login_panel(&mut self, ui: &mut egui::Ui) {
+        egui::TopBottomPanel::top("login_panel_top")
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::WHITE)
+                    .outer_margin(egui::style::Margin {
+                        left: 350.,
+                        right: 350.,
+                        top: 100.,
+                        bottom: 100.,
+                    })
+                    .inner_margin(20.)
+                    .rounding(25.),
+            )
+            .show_inside(ui, |ui| {
+                ui.style_mut().text_styles = [(
+                    egui::TextStyle::Body,
+                    egui::FontId::new(32.0, egui::FontFamily::Proportional),
+                )]
+                .into();
+
+                ui.style_mut().visuals.extreme_bg_color = egui::Color32::LIGHT_GRAY;
+
+                ui.add(egui::Label::new("Username"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.username).text_color(egui::Color32::BLACK),
+                );
+
+                ui.add(egui::Label::new("Password"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.password)
+                        .text_color(egui::Color32::BLACK)
+                        .password(true),
+                );
+            });
     }
 
     fn bottom_panel(&mut self, ui: &mut egui::Ui) {
