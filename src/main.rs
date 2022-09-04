@@ -1,11 +1,126 @@
 use eframe::{egui, emath::Vec2};
 mod atomix;
 
-struct PatcherApp {}
+fn load_image_from_memory(image_data: &[u8]) -> Result<egui::ColorImage, image::ImageError> {
+    let image = image::load_from_memory(image_data)?;
+    let size = [image.width() as _, image.height() as _];
+    let image_buffer = image.to_rgba8();
+    let pixels = image_buffer.as_flat_samples();
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        size,
+        pixels.as_slice(),
+    ))
+}
+
+struct PatcherApp {
+    background_handle: Option<egui::TextureHandle>,
+}
 
 impl PatcherApp {
     fn new() -> PatcherApp {
-        PatcherApp {}
+        PatcherApp {
+            background_handle: None,
+        }
+    }
+
+    pub fn load_background(&mut self, ui: &mut egui::Ui) -> egui::TextureHandle {
+        if let Some(handle) = &self.background_handle {
+            return handle.clone();
+        }
+        let bg_img = load_image_from_memory(include_bytes!("../assets/top_bg.png"))
+            .expect("Background texture should be valid");
+        let handle = ui
+            .ctx()
+            .load_texture("background", bg_img, egui::TextureFilter::Linear);
+        self.background_handle = Some(handle);
+        self.background_handle
+            .as_ref()
+            .expect("Background was just loaded")
+            .clone()
+    }
+
+    pub fn window(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        atomix::window_frame(ctx, frame, "Atomix ECO Launcher", |ui| {
+            self.background(ui);
+            self.central_panel(ui);
+        });
+    }
+
+    fn background(&mut self, ui: &mut egui::Ui) {
+        let size = ui.available_size();
+        let bg_handle = self.load_background(ui);
+
+        let max_rect = ui.max_rect();
+        let top = max_rect.top();
+        let left = max_rect.left();
+        let right = max_rect.right();
+        let bottom = max_rect.bottom();
+        let bg_rect = egui::Rect {
+            min: egui::Pos2 { x: left, y: top },
+            max: egui::Pos2 {
+                x: right,
+                y: bottom - 50.,
+            },
+        };
+
+        egui::Image::new(&bg_handle, size).paint_at(ui, bg_rect);
+    }
+
+    pub fn central_panel(&mut self, ui: &mut egui::Ui) {
+        self.progress_panel(ui);
+    }
+
+    fn progress_panel(&mut self, ui: &mut egui::Ui) {
+        egui::TopBottomPanel::bottom("progress_panel")
+            .resizable(false)
+            .min_height(110.)
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::LIGHT_GRAY)
+                    .outer_margin(egui::style::Margin::same(0.))
+                    .inner_margin(egui::style::Margin::same(15.))
+                    .rounding(egui::Rounding::same(25.)),
+            )
+            .show_inside(ui, |ui| {
+                ui.centered_and_justified(|ui| {
+                    self.play_button_panel(ui);
+                    self.patch_progress_bar(ui);
+                });
+            });
+    }
+
+    fn play_button_panel(&mut self, ui: &mut egui::Ui) {
+        egui::SidePanel::right("progress_bar_panel")
+            .min_width(200.)
+            .resizable(false)
+            .frame(
+                egui::Frame::none()
+                    .inner_margin(egui::style::Margin {
+                        left: 50.,
+                        right: 10.,
+                        top: 10.,
+                        bottom: 10.,
+                    })
+                    .fill(egui::Color32::TRANSPARENT),
+            )
+            .show_inside(ui, |ui| {
+                ui.centered_and_justified(|ui| {
+                    ui.style_mut().text_styles = [(
+                        egui::TextStyle::Button,
+                        egui::FontId::new(60.0, egui::FontFamily::Proportional),
+                    )]
+                    .into();
+                    ui.add(atomix::RoundButton::new("PLAY").rounding(25.));
+                });
+            });
+    }
+
+    fn patch_progress_bar(&mut self, ui: &mut egui::Ui) {
+        // Progress bar primary color
+        ui.style_mut().visuals.selection.bg_fill = egui::Color32::from_rgb(0, 230, 100);
+        // Progress bar secondary color
+        ui.style_mut().visuals.extreme_bg_color = egui::Color32::GRAY;
+        ui.add(atomix::ProgressBar::new(0.25).height(100.).rounding(25.));
     }
 }
 
@@ -16,75 +131,8 @@ impl eframe::App for PatcherApp {
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         ctx.request_repaint();
-        window(ctx, frame);
+        self.window(ctx, frame);
     }
-}
-
-pub fn window(ctx: &egui::Context, frame: &mut eframe::Frame) {
-    atomix::window_frame(ctx, frame, "Atomix ECO Launcher", |_ui| {
-        central_panel(ctx);
-    });
-}
-
-pub fn central_panel(ctx: &egui::Context) {
-    egui::CentralPanel::default()
-        .frame(egui::Frame::none())
-        .show(ctx, |ui| {
-            progress_panel(ui);
-        });
-}
-
-fn progress_panel(ui: &mut egui::Ui) {
-    egui::TopBottomPanel::bottom("progress_panel")
-        .resizable(false)
-        .min_height(110.)
-        .frame(
-            egui::Frame::none()
-                .fill(egui::Color32::LIGHT_GRAY)
-                .outer_margin(egui::style::Margin::same(0.))
-                .inner_margin(egui::style::Margin::same(15.))
-                .rounding(egui::Rounding::same(25.)),
-        )
-        .show_inside(ui, |ui| {
-            ui.centered_and_justified(|ui| {
-                play_button_panel(ui);
-                patch_progress_bar(ui);
-            });
-        });
-}
-
-fn play_button_panel(ui: &mut egui::Ui) {
-    egui::SidePanel::right("progress_bar_panel")
-        .min_width(200.)
-        .resizable(false)
-        .frame(
-            egui::Frame::none()
-                .inner_margin(egui::style::Margin {
-                    left: 50.,
-                    right: 10.,
-                    top: 10.,
-                    bottom: 10.,
-                })
-                .fill(egui::Color32::TRANSPARENT),
-        )
-        .show_inside(ui, |ui| {
-            ui.centered_and_justified(|ui| {
-                ui.style_mut().text_styles = [(
-                    egui::TextStyle::Button,
-                    egui::FontId::new(60.0, egui::FontFamily::Proportional),
-                )]
-                .into();
-                ui.add(atomix::RoundButton::new("PLAY").rounding(25.));
-            });
-        });
-}
-
-fn patch_progress_bar(ui: &mut egui::Ui) {
-    // Progress bar primary color
-    ui.style_mut().visuals.selection.bg_fill = egui::Color32::from_rgb(0, 230, 100);
-    // Progress bar secondary color
-    ui.style_mut().visuals.extreme_bg_color = egui::Color32::GRAY;
-    ui.add(atomix::ProgressBar::new(0.25).height(100.).rounding(25.));
 }
 
 fn main() {
