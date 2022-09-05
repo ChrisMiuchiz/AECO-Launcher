@@ -89,7 +89,11 @@ impl PatcherApp {
                         bottom: 100.,
                     })
                     .inner_margin(20.)
-                    .rounding(25.),
+                    .rounding(25.)
+                    .shadow(egui::epaint::Shadow {
+                        extrusion: 30.,
+                        color: egui::Color32::DARK_GRAY,
+                    }),
             )
             .show_inside(ui, |ui| {
                 ui.style_mut().text_styles = [(
