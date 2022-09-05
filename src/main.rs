@@ -12,11 +12,56 @@ fn load_image_from_memory(image_data: &[u8]) -> Result<egui::ColorImage, image::
     ))
 }
 
+enum ProgressBarState {
+    Downloading(String, f32),
+    Connecting(String),
+    Error(String),
+}
+
+impl ProgressBarState {
+    pub fn background_color(&self) -> egui::Color32 {
+        egui::Color32::GRAY
+    }
+
+    pub fn foreground_color(&self) -> egui::Color32 {
+        match &self {
+            ProgressBarState::Downloading(_, _) => egui::Color32::from_rgb(0x4e, 0x80, 0x4e),
+            ProgressBarState::Connecting(_) => egui::Color32::from_rgb(0xF0, 0xD0, 0x90),
+            ProgressBarState::Error(_) => egui::Color32::from_rgb(0xD0, 0x80, 0x80),
+        }
+    }
+
+    pub fn text_color(&self) -> egui::Color32 {
+        match &self {
+            ProgressBarState::Downloading(_, _) => egui::Color32::WHITE,
+            ProgressBarState::Connecting(_) => egui::Color32::DARK_GRAY,
+            ProgressBarState::Error(_) => egui::Color32::WHITE,
+        }
+    }
+
+    pub fn amount(&self) -> f32 {
+        match &self {
+            ProgressBarState::Downloading(_, amount) => *amount,
+            ProgressBarState::Connecting(_) => 1.,
+            ProgressBarState::Error(_) => 1.,
+        }
+    }
+
+    pub fn text(&self) -> &String {
+        match &self {
+            ProgressBarState::Downloading(s, _) => s,
+            ProgressBarState::Connecting(s) => s,
+            ProgressBarState::Error(s) => s,
+        }
+    }
+}
+
 struct PatcherApp {
     background_handle: Option<egui::TextureHandle>,
     link_bar_color: egui::Color32,
     username: String,
     password: String,
+    progress_bar_state: ProgressBarState,
 }
 
 impl PatcherApp {
@@ -26,6 +71,10 @@ impl PatcherApp {
             link_bar_color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 240),
             username: String::new(),
             password: String::new(),
+            progress_bar_state: ProgressBarState::Downloading(
+                "Downloading assets...".to_string(),
+                0.15,
+            ),
         }
     }
 
@@ -131,7 +180,7 @@ impl PatcherApp {
                     }),
             )
             .resizable(false)
-            .min_height(175.)
+            .min_height(144.)
             .show_inside(ui, |ui| {
                 self.progress_panel(ui);
                 self.links_panel(ui);
@@ -160,7 +209,7 @@ impl PatcherApp {
     fn progress_panel(&mut self, ui: &mut egui::Ui) {
         egui::TopBottomPanel::bottom("progress_panel_inner")
             .resizable(false)
-            .min_height(110.)
+            .min_height(80.)
             .frame(
                 egui::Frame::none()
                     .fill(egui::Color32::LIGHT_GRAY)
@@ -183,10 +232,10 @@ impl PatcherApp {
             .frame(
                 egui::Frame::none()
                     .inner_margin(egui::style::Margin {
-                        left: 50.,
+                        left: 35.,
                         right: 10.,
-                        top: 10.,
-                        bottom: 10.,
+                        top: 4.,
+                        bottom: 4.,
                     })
                     .fill(egui::Color32::TRANSPARENT),
             )
@@ -204,10 +253,21 @@ impl PatcherApp {
 
     fn patch_progress_bar(&mut self, ui: &mut egui::Ui) {
         // Progress bar primary color
-        ui.style_mut().visuals.selection.bg_fill = egui::Color32::from_rgb(0, 230, 100);
+        ui.style_mut().visuals.selection.bg_fill = self.progress_bar_state.foreground_color();
         // Progress bar secondary color
-        ui.style_mut().visuals.extreme_bg_color = egui::Color32::GRAY;
-        ui.add(atomix::ProgressBar::new(0.25).height(100.).rounding(25.));
+        ui.style_mut().visuals.extreme_bg_color = self.progress_bar_state.background_color();
+        ui.style_mut().text_styles = [(
+            egui::TextStyle::Button,
+            egui::FontId::new(32.0, egui::FontFamily::Proportional),
+        )]
+        .into();
+        ui.style_mut().visuals.override_text_color = Some(self.progress_bar_state.text_color());
+        ui.add(
+            atomix::ProgressBar::new(self.progress_bar_state.amount())
+                .height(72.)
+                .rounding(25.)
+                .text(self.progress_bar_state.text()),
+        );
     }
 }
 
