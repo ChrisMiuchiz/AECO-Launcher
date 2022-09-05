@@ -11,3 +11,4 @@ image = "0.24.3"
 strip = true
 lto = true
 panic = "abort"
+codegen-units = 1
