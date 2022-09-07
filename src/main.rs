@@ -108,8 +108,8 @@ impl PatcherApp {
         // Calculate how tall it needs to be without stretching.
         let image_size = bg_handle.size_vec2();
         let fit_x = ui.available_width();
-        let scale = fit_x / image_size.x as f32;
-        let fit_y = image_size.y as f32 * scale;
+        let scale = fit_x / image_size.x;
+        let fit_y = image_size.y * scale;
 
         let max_rect = ui.max_rect();
         let top = max_rect.top();
