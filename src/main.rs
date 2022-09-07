@@ -102,8 +102,14 @@ impl PatcherApp {
     }
 
     fn background(&mut self, ui: &mut egui::Ui) {
-        let size = ui.available_size();
         let bg_handle = self.load_background(ui);
+
+        // The image should be as wide as the window can contain.
+        // Calculate how tall it needs to be without stretching.
+        let image_size = bg_handle.size_vec2();
+        let fit_x = ui.available_width();
+        let scale = fit_x / image_size.x as f32;
+        let fit_y = image_size.y as f32 * scale;
 
         let max_rect = ui.max_rect();
         let top = max_rect.top();
@@ -114,11 +120,11 @@ impl PatcherApp {
             min: egui::Pos2 { x: left, y: top },
             max: egui::Pos2 {
                 x: right,
-                y: bottom - 50.,
+                y: fit_y.min(bottom - 25.),
             },
         };
 
-        egui::Image::new(&bg_handle, size).paint_at(ui, bg_rect);
+        egui::Image::new(&bg_handle, bg_handle.size_vec2()).paint_at(ui, bg_rect);
     }
 
     pub fn central_panel(&mut self, ui: &mut egui::Ui) {
