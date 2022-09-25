@@ -73,6 +73,11 @@ impl PatchWorker {
         self.send(PatchMessage::Downloading(text, percentage));
     }
 
+    /// Send connecting information to the GUI
+    fn send_connecting(&self, text: String) {
+        self.send(PatchMessage::Connecting(text));
+    }
+
     pub fn run(&self) {
         self.main_loop();
     }
