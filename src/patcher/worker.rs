@@ -306,6 +306,7 @@ impl PatchWorker {
 
     /// Checks whether the game is installed and installs it if not
     fn ensure_game_installed(&self) -> Result<(), String> {
+        self.send_download("Checking game installation".to_string(), 1.);
         if !self.is_game_present() {
             println!("Downloading game since it is not installed.");
             let base_file = self.download_base()?;
