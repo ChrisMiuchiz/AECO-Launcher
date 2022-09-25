@@ -1,5 +1,5 @@
 use super::constants::*;
-use crate::message::{GUIMessage, PatchMessage};
+use crate::message::{GUIMessage, PatchMessage, PatchStatus};
 use aeco_patch_config::fsobject::*;
 use aeco_patch_config::status::ServerStatus;
 use futures_util::StreamExt;
@@ -82,13 +82,60 @@ impl PatchWorker {
         self.send(PatchMessage::Connecting(text));
     }
 
+    /// Send information about the result of the patch routine to the GUI
+    fn send_status(&self, status: PatchStatus) {
+        self.send(PatchMessage::PatchStatus(status));
+        self.clear_recv();
+    }
+
+    fn recv(&self) -> Result<GUIMessage, std::sync::mpsc::RecvError> {
+        self.rx.recv()
+    }
+
+    fn clear_recv(&self) {
+        while self.rx.try_recv().is_ok() {}
+    }
+
     pub fn run(&self) {
         self.main_loop();
     }
 
     fn main_loop(&self) {
-        if let Err(why) = self.patch_routine() {
-            eprintln!("{why}");
+        // Start by performing the patch check
+        let mut message = GUIMessage::Retry;
+        loop {
+            match message {
+                GUIMessage::Retry => {
+                    self.send_status(PatchStatus::Working);
+                    if let Err(why) = self.patch_routine() {
+                        self.send_status(PatchStatus::Error);
+                        eprintln!("{why}");
+                    }
+                }
+                GUIMessage::Play => {
+                    match self.start_game() {
+                        Ok(_) => {
+                            // The game is running and we can exit
+                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            self.send_status(PatchStatus::GameLaunched);
+                            return;
+                        }
+                        Err(why) => {
+                            // Could not launch the game, need to stay open to inform user
+                            self.send_status(PatchStatus::Error);
+                            eprintln!("Failed to launch game: {why}");
+                        }
+                    }
+                }
+            }
+
+            message = match self.recv() {
+                Ok(m) => m,
+                Err(why) => {
+                    eprintln!("{why}");
+                    return;
+                }
+            };
         }
     }
 
@@ -113,7 +160,7 @@ impl PatchWorker {
         // Compare local files against the patch data, and update files if needed
         self.check_patches(&patch)?;
 
-        self.send_download("Ready".to_string(), 1.);
+        self.send_status(PatchStatus::Finished);
 
         Ok(())
     }
@@ -621,6 +668,12 @@ impl PatchWorker {
 
                 Ok(bytes.to_vec())
             })
+    }
+
+    fn start_game(&self) -> Result<(), String> {
+        self.send_download("Let's play the game!".to_string(), 1.);
+
+        Ok(())
     }
 }
 

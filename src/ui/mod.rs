@@ -1,4 +1,4 @@
-use crate::message::{GUIMessage, PatchMessage};
+use crate::message::{GUIMessage, PatchMessage, PatchStatus};
 use eframe::{egui, emath::Vec2};
 use std::sync::mpsc::{Receiver, Sender};
 mod atomix;
@@ -18,6 +18,12 @@ enum ProgressBarState {
     Downloading(String, f32),
     Connecting(String),
     Error(String),
+}
+
+enum PlayButtonState {
+    Disabled,
+    Play,
+    Retry,
 }
 
 impl ProgressBarState {
@@ -66,6 +72,7 @@ pub struct PatcherUI {
     username: String,
     password: String,
     progress_bar_state: ProgressBarState,
+    play_button_state: PlayButtonState,
 }
 
 impl PatcherUI {
@@ -80,6 +87,7 @@ impl PatcherUI {
             progress_bar_state: ProgressBarState::Connecting(
                 "Waiting for patch server...".to_string(),
             ),
+            play_button_state: PlayButtonState::Disabled,
         }
     }
 
@@ -121,7 +129,7 @@ impl PatcherUI {
             .clone()
     }
 
-    fn handle_messages(&mut self) {
+    fn handle_messages(&mut self, frame: &mut eframe::Frame) {
         while let Ok(message) = self.rx.try_recv() {
             match message {
                 PatchMessage::Error(message) => {
@@ -133,12 +141,31 @@ impl PatcherUI {
                 PatchMessage::Connecting(message) => {
                     self.progress_bar_state = ProgressBarState::Connecting(message);
                 }
+                PatchMessage::PatchStatus(status) => {
+                    match status {
+                        PatchStatus::Finished => {
+                            self.progress_bar_state =
+                                ProgressBarState::Downloading("Ready!".to_string(), 1.);
+                            self.play_button_state = PlayButtonState::Play;
+                        }
+                        PatchStatus::Working => {
+                            self.play_button_state = PlayButtonState::Disabled;
+                        }
+                        PatchStatus::Error => {
+                            self.play_button_state = PlayButtonState::Retry;
+                        }
+                        PatchStatus::GameLaunched => {
+                            // We are done!
+                            frame.close();
+                        }
+                    }
+                }
             }
         }
     }
 
     fn window(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.handle_messages();
+        self.handle_messages(frame);
         atomix::window_frame(ctx, frame, "Atomix ECO Launcher", |ui| {
             self.background(ui);
             self.central_panel(ui);
@@ -296,9 +323,44 @@ impl PatcherUI {
                         egui::FontId::new(60.0, egui::FontFamily::Proportional),
                     )]
                     .into();
-                    ui.add(atomix::RoundButton::new("PLAY").rounding(25.));
+                    self.play_button(ui);
                 });
             });
+    }
+
+    fn send(&self, message: GUIMessage) {
+        if let Err(why) = self.tx.send(message) {
+            eprintln!("Could not send message from GUI to PatchWorker: {why}");
+        }
+    }
+
+    fn play_button(&mut self, ui: &mut egui::Ui) {
+        let rounding = 25.;
+        match self.play_button_state {
+            PlayButtonState::Disabled => {
+                ui.add(
+                    atomix::RoundButton::new("WAIT")
+                        .rounding(rounding)
+                        .sense(egui::Sense::hover()),
+                );
+            }
+            PlayButtonState::Play => {
+                if ui
+                    .add(atomix::RoundButton::new("PLAY").rounding(rounding))
+                    .clicked()
+                {
+                    self.send(GUIMessage::Play);
+                }
+            }
+            PlayButtonState::Retry => {
+                if ui
+                    .add(atomix::RoundButton::new("RETRY").rounding(rounding))
+                    .clicked()
+                {
+                    self.send(GUIMessage::Retry);
+                }
+            }
+        };
     }
 
     fn patch_progress_bar(&mut self, ui: &mut egui::Ui) {
