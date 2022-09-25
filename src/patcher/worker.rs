@@ -87,49 +87,35 @@ impl PatchWorker {
     }
 
     fn main_loop(&self) {
-        self.patch_routine();
+        if let Err(why) = self.patch_routine() {
+            eprintln!("{why}");
+        }
     }
 
-    fn patch_routine(&self) {
+    fn patch_routine(&self) -> Result<(), String> {
         self.send_connecting("Checking server status".to_string());
-        let server_status = match self.download_server_status() {
-            Ok(s) => s,
-            Err(why) => {
-                eprintln!("{why}");
-                return;
-            }
-        };
+        let server_status = self.download_server_status()?;
 
         match server_status {
             ServerStatus::Online => self.send_connecting("Server is online".to_string()),
             ServerStatus::Maintenance => {
                 self.send_connecting("Server is down for maintenance".to_string());
-                return;
+                return Err("Server is down for maintenance".to_string());
             }
         }
 
         // Make sure the game is installed, and install it if not
-        if let Err(why) = self.ensure_game_installed() {
-            eprintln!("{why}");
-            return;
-        }
+        self.ensure_game_installed()?;
 
         // Get patch information from the patch server
-        let patch = match self.download_patch_metadata() {
-            Ok(x) => x,
-            Err(why) => {
-                eprintln!("{why}");
-                return;
-            }
-        };
+        let patch = self.download_patch_metadata()?;
 
         // Compare local files against the patch data, and update files if needed
-        if let Err(why) = self.check_patches(&patch) {
-            eprintln!("{why}");
-            return;
-        }
+        self.check_patches(&patch)?;
 
         self.send_download("Ready".to_string(), 1.);
+
+        Ok(())
     }
 
     /// Checks whether the game is in the same directory as this program
@@ -148,23 +134,21 @@ impl PatchWorker {
                 let response = match self.client.get(self.game_zip_url.clone()).send().await {
                     Ok(x) => x,
                     Err(why) => {
-                        self.send_error(format!("Failed to download game base: \n{why}"));
+                        self.send_error("Failed to download game base".to_string());
                         return Err(why.to_string());
                     }
                 };
 
                 let status = response.status();
                 if !status.is_success() {
-                    self.send_error(format!(
-                        "Received {status}\nwhile trying to download base game"
-                    ));
+                    self.send_error("Failed to download game base".to_string());
                     return Err(status.to_string());
                 }
 
                 let mut file = match tempfile::tempfile_in(&self.self_dir) {
                     Ok(x) => x,
                     Err(why) => {
-                        self.send_error(format!("Failed to create game base:\n{why}"));
+                        self.send_error("Failed to create game base".to_string());
                         return Err(why.to_string());
                     }
                 };
@@ -178,15 +162,13 @@ impl PatchWorker {
                     let bytes = match stream_result {
                         Ok(x) => x,
                         Err(why) => {
-                            self.send_error(format!(
-                                "Failed to read from base game byte stream:\n{why}"
-                            ));
+                            self.send_error("Failed while reading game base stream".to_string());
                             return Err(why.to_string());
                         }
                     };
 
                     if let Err(why) = file.write_all(&bytes) {
-                        self.send_error(format!("Failed while writing base game to disk:\n{why}"));
+                        self.send_error("Failed while writing base game to disk".to_string());
                         return Err(why.to_string());
                     }
 
@@ -220,7 +202,7 @@ impl PatchWorker {
         let mut archive = match zip::read::ZipArchive::new(base_file) {
             Ok(a) => a,
             Err(why) => {
-                self.send_error(format!("Failed to extract base game:\n{why}"));
+                self.send_error("Failed to extract base game".to_string());
                 return Err(why.to_string());
             }
         };
@@ -237,7 +219,7 @@ impl PatchWorker {
             let file = match archive.by_index(file_number) {
                 Ok(f) => f,
                 Err(why) => {
-                    self.send_error(format!("Failed to read base game:\n{why}"));
+                    self.send_error("Failed to read base game".to_string());
                     return Err(why.to_string());
                 }
             };
@@ -262,7 +244,7 @@ impl PatchWorker {
             let mut file = match archive.by_index(file_number) {
                 Ok(f) => f,
                 Err(why) => {
-                    self.send_error(format!("Failed to extract base game:\n{why}"));
+                    self.send_error("Failed to extract base game".to_string());
                     return Err(why.to_string());
                 }
             };
@@ -279,14 +261,14 @@ impl PatchWorker {
 
             if file.name().ends_with('/') {
                 if let Err(why) = std::fs::create_dir_all(&outpath) {
-                    self.send_error(format!("Failed to extract base game:\n{why}"));
+                    self.send_error("Failed to extract base game".to_string());
                     return Err(why.to_string());
                 }
             } else {
                 if let Some(p) = outpath.parent() {
                     if !p.exists() {
                         if let Err(why) = std::fs::create_dir_all(&p) {
-                            self.send_error(format!("Failed to extract base game:\n{why}"));
+                            self.send_error("Failed to extract base game".to_string());
                             return Err(why.to_string());
                         }
                     }
@@ -294,12 +276,12 @@ impl PatchWorker {
                 let mut outfile = match std::fs::File::create(&outpath) {
                     Ok(f) => f,
                     Err(why) => {
-                        self.send_error(format!("Failed to extract base game:\n{why}"));
+                        self.send_error("Failed to extract base game".to_string());
                         return Err(why.to_string());
                     }
                 };
                 if let Err(why) = std::io::copy(&mut file, &mut outfile) {
-                    self.send_error(format!("Failed to extract base game:\n{why}"));
+                    self.send_error("Failed to extract base game".to_string());
                     return Err(why.to_string());
                 }
             }
@@ -311,7 +293,7 @@ impl PatchWorker {
                     if let Err(why) =
                         std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode))
                     {
-                        self.send_error(format!("Failed to extract base game:\n{why}"));
+                        self.send_error("Failed to extract base game".to_string());
                         return Err(why.to_string());
                     }
                 }
@@ -346,21 +328,21 @@ impl PatchWorker {
                 let response = match self.client.get(self.status_url.clone()).send().await {
                     Ok(x) => x,
                     Err(why) => {
-                        self.send_error(format!("Failed to get status: \n{why}"));
+                        self.send_error("Failed to get server status".to_string());
                         return Err(why.to_string());
                     }
                 };
 
                 let statuscode = response.status();
                 if !statuscode.is_success() {
-                    self.send_error(format!("Received {statuscode}\nwhile trying to get status"));
+                    self.send_error("Failed to get server status".to_string());
                     return Err(statuscode.to_string());
                 }
 
                 let json_bytes = match response.bytes().await {
                     Ok(b) => b,
                     Err(why) => {
-                        self.send_error(format!("Failed to get status: \n{why}"));
+                        self.send_error("Failed to get server status".to_string());
                         return Err(why.to_string());
                     }
                 };
@@ -368,7 +350,7 @@ impl PatchWorker {
                 let server_status = match serde_json::from_slice::<ServerStatus>(&json_bytes) {
                     Ok(p) => p,
                     Err(why) => {
-                        self.send_error(format!("Failed to parse patch data: \n{why}"));
+                        self.send_error("Failed to parse server status".to_string());
                         return Err(why.to_string());
                     }
                 };
@@ -387,21 +369,21 @@ impl PatchWorker {
                 let response = match self.client.get(self.patchlist_url.clone()).send().await {
                     Ok(x) => x,
                     Err(why) => {
-                        self.send_error(format!("Failed to get patch data: \n{why}"));
+                        self.send_error("Failed to get patch data".to_string());
                         return Err(why.to_string());
                     }
                 };
 
                 let status = response.status();
                 if !status.is_success() {
-                    self.send_error(format!("Received {status}\nwhile trying to get patch data"));
+                    self.send_error("Failed to get patch data".to_string());
                     return Err(status.to_string());
                 }
 
                 let json_bytes = match response.bytes().await {
                     Ok(b) => b,
                     Err(why) => {
-                        self.send_error(format!("Failed to get patch data: \n{why}"));
+                        self.send_error("Failed to get patch data".to_string());
                         return Err(why.to_string());
                     }
                 };
@@ -409,7 +391,7 @@ impl PatchWorker {
                 let patch_dir = match serde_json::from_slice::<Directory>(&json_bytes) {
                     Ok(p) => p,
                     Err(why) => {
-                        self.send_error(format!("Failed to parse patch data: \n{why}"));
+                        self.send_error("Failed to parse patch data".to_string());
                         return Err(why.to_string());
                     }
                 };
@@ -430,7 +412,7 @@ impl PatchWorker {
         ) {
             Ok(n) => n,
             Err(why) => {
-                self.send_error(format!("Couldn't check local files:\n{why}"));
+                self.send_error("Failed to check local files".to_string());
                 return Err(why);
             }
         };
@@ -618,23 +600,21 @@ impl PatchWorker {
                 let response = match self.client.get(net_file.clone()).send().await {
                     Ok(x) => x,
                     Err(why) => {
-                        self.send_error(format!("Failed to get patched file: \n{why}"));
+                        self.send_error("Failed to get patched file".to_string());
                         return Err(why.to_string());
                     }
                 };
 
                 let status = response.status();
                 if !status.is_success() {
-                    self.send_error(format!(
-                        "Received {status}\nwhile trying to get patched file"
-                    ));
+                    self.send_error("Failed to get patched file".to_string());
                     return Err(status.to_string());
                 }
 
                 let bytes = match response.bytes().await {
                     Ok(b) => b,
                     Err(why) => {
-                        self.send_error(format!("Failed to get patched file: \n{why}"));
+                        self.send_error("Failed to get patched file".to_string());
                         return Err(why.to_string());
                     }
                 };
