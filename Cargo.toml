@@ -4,8 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+aeco-patch-config = { git = "https://github.com/ChrisMiuchiz/AECO-Patch-Config.git" }
+aeco-archive = { git = "https://github.com/ChrisMiuchiz/AECO-Archive.git" }
+byte-unit = "4.0.14"
 eframe = "0.19.0"
+futures-util = "0.3.24"
 image = "0.24.3"
+reqwest = { version = "0.11.12", features = ["blocking", "stream"] }
+serde = { version = "1.0.144", features = ["derive"] }
+serde_json = "1.0.85"
+tempfile = "3.3.0"
+tokio = { version = "1.21.1", features = ["rt-multi-thread"] }
+zip = "0.6.2"
 
 [profile.release]
 strip = true

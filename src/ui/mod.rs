@@ -1,4 +1,6 @@
+use crate::message::{GUIMessage, PatchMessage};
 use eframe::{egui, emath::Vec2};
+use std::sync::mpsc::{Receiver, Sender};
 mod atomix;
 
 fn load_image_from_memory(image_data: &[u8]) -> Result<egui::ColorImage, image::ImageError> {
@@ -57,6 +59,8 @@ impl ProgressBarState {
 }
 
 pub struct PatcherUI {
+    tx: Sender<GUIMessage>,
+    rx: Receiver<PatchMessage>,
     background_handle: Option<egui::TextureHandle>,
     link_bar_color: egui::Color32,
     username: String,
@@ -65,20 +69,21 @@ pub struct PatcherUI {
 }
 
 impl PatcherUI {
-    pub fn new() -> PatcherUI {
+    pub fn new(sender: Sender<GUIMessage>, receiver: Receiver<PatchMessage>) -> PatcherUI {
         PatcherUI {
+            tx: sender,
+            rx: receiver,
             background_handle: None,
             link_bar_color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 240),
             username: String::new(),
             password: String::new(),
-            progress_bar_state: ProgressBarState::Downloading(
-                "Downloading assets...".to_string(),
-                0.15,
+            progress_bar_state: ProgressBarState::Connecting(
+                "Waiting for patch server...".to_string(),
             ),
         }
     }
 
-    pub fn run() {
+    pub fn run(sender: Sender<GUIMessage>, receiver: Receiver<PatchMessage>) {
         let window_size = Some(Vec2 {
             x: 1000.0,
             y: 600.0,
@@ -96,7 +101,7 @@ impl PatcherUI {
                 transparent: true,
                 ..eframe::NativeOptions::default()
             },
-            Box::new(|_cc| Box::new(PatcherUI::new())),
+            Box::new(|_cc| Box::new(PatcherUI::new(sender, receiver))),
         );
     }
 
@@ -116,7 +121,21 @@ impl PatcherUI {
             .clone()
     }
 
+    fn handle_messages(&mut self) {
+        while let Ok(message) = self.rx.try_recv() {
+            match message {
+                PatchMessage::Error(message) => {
+                    self.progress_bar_state = ProgressBarState::Error(message);
+                }
+                PatchMessage::Downloading(message, progress) => {
+                    self.progress_bar_state = ProgressBarState::Downloading(message, progress);
+                }
+            }
+        }
+    }
+
     fn window(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.handle_messages();
         atomix::window_frame(ctx, frame, "Atomix ECO Launcher", |ui| {
             self.background(ui);
             self.central_panel(ui);
