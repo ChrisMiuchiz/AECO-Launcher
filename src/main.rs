@@ -1,3 +1,6 @@
+// Don't open a command prompt on Windows
+#![windows_subsystem = "windows"]
+
 mod message;
 mod patcher;
 mod ui;
