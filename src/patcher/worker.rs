@@ -1,6 +1,7 @@
 use super::constants::*;
 use crate::message::{GUIMessage, PatchMessage};
 use aeco_patch_config::fsobject::*;
+use aeco_patch_config::status::ServerStatus;
 use futures_util::StreamExt;
 use std::{
     io::Write,
@@ -18,6 +19,7 @@ pub struct PatchWorker {
     game_base_url: reqwest::Url,
     game_zip_url: reqwest::Url,
     patchlist_url: reqwest::Url,
+    status_url: reqwest::Url,
     patch_url: reqwest::Url,
 }
 
@@ -38,6 +40,7 @@ impl PatchWorker {
             .map_err(|err| err.to_string())?;
         let meta_url = server_url.join(META_DIR).map_err(|err| err.to_string())?;
         let patchlist_url = meta_url.join(PATCHLIST).map_err(|err| err.to_string())?;
+        let status_url = meta_url.join(STATUS).map_err(|err| err.to_string())?;
         let patch_url = server_url.join(PATCH_DIR).map_err(|err| err.to_string())?;
         let client = reqwest::Client::builder()
             .build()
@@ -52,6 +55,7 @@ impl PatchWorker {
             game_base_url,
             game_zip_url,
             patchlist_url,
+            status_url,
             patch_url,
         })
     }
@@ -87,6 +91,23 @@ impl PatchWorker {
     }
 
     fn patch_routine(&self) {
+        self.send_connecting("Checking server status".to_string());
+        let server_status = match self.download_server_status() {
+            Ok(s) => s,
+            Err(why) => {
+                eprintln!("{why}");
+                return;
+            }
+        };
+
+        match server_status {
+            ServerStatus::Online => self.send_connecting("Server is online".to_string()),
+            ServerStatus::Maintenance => {
+                self.send_connecting("Server is down for maintenance".to_string());
+                return;
+            }
+        }
+
         // Make sure the game is installed, and install it if not
         if let Err(why) = self.ensure_game_installed() {
             eprintln!("{why}");
@@ -314,6 +335,46 @@ impl PatchWorker {
         }
 
         Ok(())
+    }
+
+    fn download_server_status(&self) -> Result<ServerStatus, String> {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let response = match self.client.get(self.status_url.clone()).send().await {
+                    Ok(x) => x,
+                    Err(why) => {
+                        self.send_error(format!("Failed to get status: \n{why}"));
+                        return Err(why.to_string());
+                    }
+                };
+
+                let statuscode = response.status();
+                if !statuscode.is_success() {
+                    self.send_error(format!("Received {statuscode}\nwhile trying to get status"));
+                    return Err(statuscode.to_string());
+                }
+
+                let json_bytes = match response.bytes().await {
+                    Ok(b) => b,
+                    Err(why) => {
+                        self.send_error(format!("Failed to get status: \n{why}"));
+                        return Err(why.to_string());
+                    }
+                };
+
+                let server_status = match serde_json::from_slice::<ServerStatus>(&json_bytes) {
+                    Ok(p) => p,
+                    Err(why) => {
+                        self.send_error(format!("Failed to parse patch data: \n{why}"));
+                        return Err(why.to_string());
+                    }
+                };
+
+                Ok(server_status)
+            })
     }
 
     /// Downloads the patchlist and returns the parsed result
