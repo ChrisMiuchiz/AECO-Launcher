@@ -276,9 +276,19 @@ impl PatcherUI {
                     .into();
                     ui.style_mut().visuals.widgets.noninteractive.bg_stroke =
                         egui::Stroke::new(1., egui::Color32::GRAY);
-                    ui.add(egui::Button::new("Control Panel").fill(egui::Color32::TRANSPARENT));
+                    if ui
+                        .add(egui::Button::new("Control Panel").fill(egui::Color32::TRANSPARENT))
+                        .clicked()
+                    {
+                        open::that("https://ecocp.atomixro.com").ok();
+                    }
                     ui.separator();
-                    ui.add(egui::Button::new("Register").fill(egui::Color32::TRANSPARENT));
+                    if ui
+                        .add(egui::Button::new("Register").fill(egui::Color32::TRANSPARENT))
+                        .clicked()
+                    {
+                        open::that("https://ecocp.atomixro.com/register").ok();
+                    }
                 });
             });
     }
