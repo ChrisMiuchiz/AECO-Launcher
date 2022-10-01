@@ -21,6 +21,7 @@ pub struct PatchWorker {
     patchlist_url: reqwest::Url,
     status_url: reqwest::Url,
     patch_url: reqwest::Url,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl PatchWorker {
@@ -45,6 +46,11 @@ impl PatchWorker {
         let client = reqwest::Client::builder()
             .build()
             .map_err(|err| err.to_string())?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| err.to_string())?;
+
         Ok(Self {
             tx: sender,
             rx: receiver,
@@ -57,6 +63,7 @@ impl PatchWorker {
             patchlist_url,
             status_url,
             patch_url,
+            runtime,
         })
     }
 
@@ -173,75 +180,69 @@ impl PatchWorker {
 
     /// Downloads the base game and returns it in a temporary file
     fn download_base(&self) -> Result<std::fs::File, String> {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let response = match self.client.get(self.game_zip_url.clone()).send().await {
-                    Ok(x) => x,
-                    Err(why) => {
-                        self.send_error("Failed to download game base".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let response = match self
+            .runtime
+            .block_on(self.client.get(self.game_zip_url.clone()).send())
+        {
+            Ok(x) => x,
+            Err(why) => {
+                self.send_error("Failed to download game base".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                let status = response.status();
-                if !status.is_success() {
-                    self.send_error("Failed to download game base".to_string());
-                    return Err(status.to_string());
+        let status = response.status();
+        if !status.is_success() {
+            self.send_error("Failed to download game base".to_string());
+            return Err(status.to_string());
+        }
+
+        let mut file = match tempfile::tempfile_in(&self.self_dir) {
+            Ok(x) => x,
+            Err(why) => {
+                self.send_error("Failed to create game base".to_string());
+                return Err(why.to_string());
+            }
+        };
+
+        let total_size = response.content_length();
+        let mut downloaded_size = 0u64;
+
+        let mut stream = response.bytes_stream();
+
+        while let Some(stream_result) = self.runtime.block_on(stream.next()) {
+            let bytes = match stream_result {
+                Ok(x) => x,
+                Err(why) => {
+                    self.send_error("Failed while reading game base stream".to_string());
+                    return Err(why.to_string());
                 }
+            };
 
-                let mut file = match tempfile::tempfile_in(&self.self_dir) {
-                    Ok(x) => x,
-                    Err(why) => {
-                        self.send_error("Failed to create game base".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+            if let Err(why) = file.write_all(&bytes) {
+                self.send_error("Failed while writing base game to disk".to_string());
+                return Err(why.to_string());
+            }
 
-                let total_size = response.content_length();
-                let mut downloaded_size = 0u64;
+            downloaded_size += bytes.len() as u64;
+            let pretty_downloaded = byte_string(downloaded_size);
 
-                let mut stream = response.bytes_stream();
+            if let Some(total_size) = total_size {
+                downloaded_size = downloaded_size.min(total_size);
+                let progress = downloaded_size as f32 / total_size as f32;
+                let pretty_total = byte_string(total_size);
+                self.send_download(
+                    format!("Downloading base game ({pretty_downloaded} / {pretty_total})"),
+                    progress,
+                );
+            } else {
+                self.send_download(format!("Downloading base game ({pretty_downloaded})"), 1.);
+            }
+        }
 
-                while let Some(stream_result) = stream.next().await {
-                    let bytes = match stream_result {
-                        Ok(x) => x,
-                        Err(why) => {
-                            self.send_error("Failed while reading game base stream".to_string());
-                            return Err(why.to_string());
-                        }
-                    };
+        self.send_download("Finished downloading base game".to_string(), 1.);
 
-                    if let Err(why) = file.write_all(&bytes) {
-                        self.send_error("Failed while writing base game to disk".to_string());
-                        return Err(why.to_string());
-                    }
-
-                    downloaded_size += bytes.len() as u64;
-                    let pretty_downloaded = byte_string(downloaded_size);
-
-                    if let Some(total_size) = total_size {
-                        downloaded_size = downloaded_size.min(total_size);
-                        let progress = downloaded_size as f32 / total_size as f32;
-                        let pretty_total = byte_string(total_size);
-                        self.send_download(
-                            format!("Downloading base game ({pretty_downloaded} / {pretty_total})"),
-                            progress,
-                        );
-                    } else {
-                        self.send_download(
-                            format!("Downloading base game ({pretty_downloaded})"),
-                            1.,
-                        );
-                    }
-                }
-
-                self.send_download("Finished downloading base game".to_string(), 1.);
-
-                Ok(file)
-            })
+        Ok(file)
     }
 
     /// Unpacks the base game ZIP to the same directory as this program
@@ -367,84 +368,78 @@ impl PatchWorker {
     }
 
     fn download_server_status(&self) -> Result<ServerStatus, String> {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let response = match self.client.get(self.status_url.clone()).send().await {
-                    Ok(x) => x,
-                    Err(why) => {
-                        self.send_error("Failed to get server status".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let response = match self
+            .runtime
+            .block_on(self.client.get(self.status_url.clone()).send())
+        {
+            Ok(x) => x,
+            Err(why) => {
+                self.send_error("Failed to get server status".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                let statuscode = response.status();
-                if !statuscode.is_success() {
-                    self.send_error("Failed to get server status".to_string());
-                    return Err(statuscode.to_string());
-                }
+        let statuscode = response.status();
+        if !statuscode.is_success() {
+            self.send_error("Failed to get server status".to_string());
+            return Err(statuscode.to_string());
+        }
 
-                let json_bytes = match response.bytes().await {
-                    Ok(b) => b,
-                    Err(why) => {
-                        self.send_error("Failed to get server status".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let json_bytes = match self.runtime.block_on(response.bytes()) {
+            Ok(b) => b,
+            Err(why) => {
+                self.send_error("Failed to get server status".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                let server_status = match serde_json::from_slice::<ServerStatus>(&json_bytes) {
-                    Ok(p) => p,
-                    Err(why) => {
-                        self.send_error("Failed to parse server status".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let server_status = match serde_json::from_slice::<ServerStatus>(&json_bytes) {
+            Ok(p) => p,
+            Err(why) => {
+                self.send_error("Failed to parse server status".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                Ok(server_status)
-            })
+        Ok(server_status)
     }
 
     /// Downloads the patchlist and returns the parsed result
     fn download_patch_metadata(&self) -> Result<Directory, String> {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let response = match self.client.get(self.patchlist_url.clone()).send().await {
-                    Ok(x) => x,
-                    Err(why) => {
-                        self.send_error("Failed to get patch data".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let response = match self
+            .runtime
+            .block_on(self.client.get(self.patchlist_url.clone()).send())
+        {
+            Ok(x) => x,
+            Err(why) => {
+                self.send_error("Failed to get patch data".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                let status = response.status();
-                if !status.is_success() {
-                    self.send_error("Failed to get patch data".to_string());
-                    return Err(status.to_string());
-                }
+        let status = response.status();
+        if !status.is_success() {
+            self.send_error("Failed to get patch data".to_string());
+            return Err(status.to_string());
+        }
 
-                let json_bytes = match response.bytes().await {
-                    Ok(b) => b,
-                    Err(why) => {
-                        self.send_error("Failed to get patch data".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let json_bytes = match self.runtime.block_on(response.bytes()) {
+            Ok(b) => b,
+            Err(why) => {
+                self.send_error("Failed to get patch data".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                let patch_dir = match serde_json::from_slice::<Directory>(&json_bytes) {
-                    Ok(p) => p,
-                    Err(why) => {
-                        self.send_error("Failed to parse patch data".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let patch_dir = match serde_json::from_slice::<Directory>(&json_bytes) {
+            Ok(p) => p,
+            Err(why) => {
+                self.send_error("Failed to parse patch data".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                Ok(patch_dir)
-            })
+        Ok(patch_dir)
     }
 
     /// Checks files to be patched, patching them if necessary
@@ -639,35 +634,32 @@ impl PatchWorker {
 
     /// Downloads a file and returns the resulting bytes
     fn download_patched_file(&self, net_file: reqwest::Url) -> Result<Vec<u8>, String> {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let response = match self.client.get(net_file.clone()).send().await {
-                    Ok(x) => x,
-                    Err(why) => {
-                        self.send_error("Failed to get patched file".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let response = match self
+            .runtime
+            .block_on(self.client.get(net_file.clone()).send())
+        {
+            Ok(x) => x,
+            Err(why) => {
+                self.send_error("Failed to get patched file".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                let status = response.status();
-                if !status.is_success() {
-                    self.send_error("Failed to get patched file".to_string());
-                    return Err(status.to_string());
-                }
+        let status = response.status();
+        if !status.is_success() {
+            self.send_error("Failed to get patched file".to_string());
+            return Err(status.to_string());
+        }
 
-                let bytes = match response.bytes().await {
-                    Ok(b) => b,
-                    Err(why) => {
-                        self.send_error("Failed to get patched file".to_string());
-                        return Err(why.to_string());
-                    }
-                };
+        let bytes = match self.runtime.block_on(response.bytes()) {
+            Ok(b) => b,
+            Err(why) => {
+                self.send_error("Failed to get patched file".to_string());
+                return Err(why.to_string());
+            }
+        };
 
-                Ok(bytes.to_vec())
-            })
+        Ok(bytes.to_vec())
     }
 
     fn start_game(&self) -> Result<(), String> {
