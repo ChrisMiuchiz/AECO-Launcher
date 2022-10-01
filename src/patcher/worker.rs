@@ -565,6 +565,10 @@ impl PatchWorker {
         );
 
         if !disk_file.as_ref().exists() {
+            println!(
+                "Downloading new file {net_file} -> {:?}",
+                disk_file.as_ref()
+            );
             let file_bytes = self.download_patched_file(net_file)?;
             std::fs::write(disk_file, file_bytes).map_err(|why| why.to_string())?;
         } else {
@@ -575,7 +579,7 @@ impl PatchWorker {
             };
 
             if !file_matches {
-                println!("Downloading {net_file} -> {:?}", disk_file.as_ref());
+                println!("Updating {net_file} -> {:?}", disk_file.as_ref());
                 let file_bytes = self.download_patched_file(net_file)?;
                 std::fs::write(disk_file, file_bytes).map_err(|why| why.to_string())?;
             }
