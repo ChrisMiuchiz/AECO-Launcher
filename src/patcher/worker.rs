@@ -164,8 +164,15 @@ impl PatchWorker {
         // Get patch information from the patch server
         let patch = self.download_patch_metadata()?;
 
-        // Compare local files against the patch data, and update files if needed
-        self.check_patches(&patch)?;
+        // Apply patches for all platforms and for this specific platform
+        for platform in ["all", &get_platform()] {
+            // Compare local files against the patch data, and update files if needed
+            if let Some(platform_dir) = subdir_by_name(&patch, platform) {
+                self.check_platform_patches(&platform_dir)?;
+            } else {
+                println!("No patch directory found for platform \'{platform}\'");
+            }
+        }
 
         self.send_status(PatchStatus::Finished);
 
@@ -443,12 +450,22 @@ impl PatchWorker {
     }
 
     /// Checks files to be patched, patching them if necessary
-    fn check_patches(&self, dir: &Directory) -> Result<(), String> {
+    fn check_platform_patches(&self, dir: &Directory) -> Result<(), String> {
+        let check_platform = &dir.name;
+
+        // The URL to start at needs to be patch/platform because that is where
+        // platform specific files are stored
+        let platform_net_path = self
+            .patch_url
+            .join(&format!("{check_platform}/"))
+            .map_err(|why| why.to_string())?;
+
         let total_files = get_total_files_in_patch(dir);
         let checked_files = match self.check_patches_dir(
             dir,
             &self.self_dir,
-            self.patch_url.clone(),
+            platform_net_path,
+            check_platform,
             0,
             total_files,
         ) {
@@ -476,6 +493,7 @@ impl PatchWorker {
         dir: &Directory,
         disk_dir: P,
         net_path: reqwest::Url,
+        platform: &str,
         completed_files: usize,
         total_files: usize,
     ) -> Result<usize, String>
@@ -489,6 +507,7 @@ impl PatchWorker {
                     file,
                     disk_dir.as_ref().join(&file.name),
                     net_path.join(&file.name).map_err(|why| why.to_string())?,
+                    platform,
                     completed_files,
                     total_files,
                 )?,
@@ -498,6 +517,7 @@ impl PatchWorker {
                     net_path
                         .join(&format!("{}/", &d.name)) // Dir URLS need / to be parsed correctly
                         .map_err(|why| why.to_string())?,
+                    platform,
                     completed_files,
                     total_files,
                 )?,
@@ -509,6 +529,7 @@ impl PatchWorker {
                     net_path
                         .join(&format!("{}.archive/", &a.name))
                         .map_err(|why| why.to_string())?,
+                    platform,
                     completed_files,
                     total_files,
                 )?,
@@ -524,6 +545,7 @@ impl PatchWorker {
         file: &File,
         disk_file: P,
         net_file: reqwest::Url,
+        platform: &str,
         completed_files: usize,
         total_files: usize,
     ) -> Result<usize, String>
@@ -534,7 +556,11 @@ impl PatchWorker {
 
         let progress = completed_files as f32 / total_files as f32;
         self.send_download(
-            format!("Checking file {} / {}", completed_files + 1, total_files),
+            format!(
+                "Checking file {} / {} for platform \'{platform}\'",
+                completed_files + 1,
+                total_files
+            ),
             progress,
         );
 
@@ -567,6 +593,7 @@ impl PatchWorker {
         hed_path: P1,
         dat_path: P2,
         net_path: reqwest::Url,
+        platform: &str,
         completed_files: usize,
         total_files: usize,
     ) -> Result<usize, String>
@@ -584,7 +611,11 @@ impl PatchWorker {
         for file in &archive.files {
             let progress = completed_files as f32 / total_files as f32;
             self.send_download(
-                format!("Checking file {} / {}", completed_files + 1, total_files),
+                format!(
+                    "Checking file {} / {} for platform \'{platform}\'",
+                    completed_files + 1,
+                    total_files
+                ),
                 progress,
             );
             let file_matches = match disk_archive.get_file(&file.name) {
@@ -667,6 +698,26 @@ impl PatchWorker {
 
         Ok(())
     }
+}
+
+/// Gets a Directory child from a Directory by name, if it is present
+fn subdir_by_name<'a>(dir: &'a Directory, name: &str) -> Option<&'a Directory> {
+    for child in &dir.children {
+        if let FSObject::Directory(d) = child {
+            if d.name == name {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
+/// Gets a platform string to represent the current platform
+/// Some examples: `windows-x86_64`, `linux-x86`, `macos-aarch64`
+fn get_platform() -> String {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    format!("{os}-{arch}")
 }
 
 fn get_total_files_in_patch(dir: &Directory) -> usize {
