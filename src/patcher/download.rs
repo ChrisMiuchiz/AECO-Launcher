@@ -8,7 +8,7 @@ use aeco_patch_config::status::ServerStatus;
 use futures_util::StreamExt;
 
 pub fn server_status(worker: &PatchWorker) -> Result<ServerStatus, String> {
-    let result = memory_file(worker, worker.patchlist_url.clone(), |_, _| {});
+    let result = memory_file(worker, worker.status_url.clone(), |_, _| {});
 
     let json_bytes = match result {
         Ok(data) => data,
