@@ -33,28 +33,25 @@ impl PatchWorker {
     pub fn new(
         sender: Sender<PatchMessage>,
         receiver: Receiver<GUIMessage>,
-    ) -> Result<Self, String> {
-        let self_exe = std::env::current_exe().map_err(|err| err.to_string())?;
+    ) -> Result<Self, Box<dyn Error>> {
+        let self_exe = std::env::current_exe()?;
         let self_dir = self_exe
             .parent()
             .ok_or_else(|| "No parent directory for the launcher was found.".to_string())?
             .to_path_buf();
-        let server_url = reqwest::Url::parse(PATCH_SERVER).map_err(|err| err.to_string())?;
-        let game_base_url = server_url.join(BASE_DIR).map_err(|err| err.to_string())?;
-        let game_zip_url = game_base_url
-            .join(BASE_ZIP)
-            .map_err(|err| err.to_string())?;
-        let meta_url = server_url.join(META_DIR).map_err(|err| err.to_string())?;
-        let patchlist_url = meta_url.join(PATCHLIST).map_err(|err| err.to_string())?;
-        let status_url = meta_url.join(STATUS).map_err(|err| err.to_string())?;
-        let patch_url = server_url.join(PATCH_DIR).map_err(|err| err.to_string())?;
-        let client = reqwest::Client::builder()
-            .build()
-            .map_err(|err| err.to_string())?;
+
+        let server_url = reqwest::Url::parse(PATCH_SERVER)?;
+        let game_base_url = server_url.join(BASE_DIR)?;
+        let game_zip_url = game_base_url.join(BASE_ZIP)?;
+        let meta_url = server_url.join(META_DIR)?;
+        let patchlist_url = meta_url.join(PATCHLIST)?;
+        let status_url = meta_url.join(STATUS)?;
+        let patch_url = server_url.join(PATCH_DIR)?;
+
+        let client = reqwest::Client::builder().build()?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .build()
-            .map_err(|err| err.to_string())?;
+            .build()?;
 
         Ok(Self {
             tx: sender,
@@ -600,9 +597,7 @@ impl PatchWorker {
                 popen.detach();
                 std::process::exit(0)
             }
-            Err(why) => {
-                Err(why.to_patch_error("Failed to start new launcher"))
-            }
+            Err(why) => Err(why.to_patch_error("Failed to start new launcher")),
         }
     }
 
