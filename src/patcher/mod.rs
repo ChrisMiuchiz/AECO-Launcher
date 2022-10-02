@@ -3,4 +3,5 @@ pub use worker::PatchWorker;
 
 mod constants;
 mod download;
+mod error;
 mod utils;

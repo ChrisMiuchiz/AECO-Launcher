@@ -1,30 +1,20 @@
+use std::error::Error;
 use std::fs::File;
 use std::io::Write;
 
+use super::error::{PatchError, ToPatchError};
 use super::utils::byte_string;
 use super::PatchWorker;
 use aeco_patch_config::fsobject::Directory;
 use aeco_patch_config::status::ServerStatus;
 use futures_util::StreamExt;
 
-pub fn server_status(worker: &PatchWorker) -> Result<ServerStatus, String> {
-    let result = memory_file(worker, worker.status_url.clone(), |_, _| {});
+pub fn server_status(worker: &PatchWorker) -> Result<ServerStatus, PatchError> {
+    let json_bytes = memory_file(worker, worker.status_url.clone(), |_, _| {})
+        .map_err(|why| why.to_patch_error("Failed to get server status"))?;
 
-    let json_bytes = match result {
-        Ok(data) => data,
-        Err(why) => {
-            worker.send_error("Failed to get server status".to_string());
-            return Err(why);
-        }
-    };
-
-    let server_status = match serde_json::from_slice::<ServerStatus>(&json_bytes) {
-        Ok(p) => p,
-        Err(why) => {
-            worker.send_error("Failed to parse server status".to_string());
-            return Err(why.to_string());
-        }
-    };
+    let server_status = serde_json::from_slice::<ServerStatus>(&json_bytes)
+        .map_err(|why| why.to_patch_error("Failed to parse server status"))?;
 
     Ok(server_status)
 }
@@ -34,7 +24,7 @@ pub fn temp_file<F>(
     worker: &PatchWorker,
     url: reqwest::Url,
     callback: F,
-) -> Result<std::fs::File, String>
+) -> Result<std::fs::File, Box<dyn Error>>
 where
     F: Fn(u64, Option<u64>), /* downloaded bytes, total bytes */
 {
@@ -47,7 +37,7 @@ where
     // Check response status
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("URL request failed: {status}"));
+        Err(format!("URL request failed: {status}"))?;
     }
 
     // Create a new temporary file for the data to go into
@@ -61,7 +51,7 @@ where
     let mut stream = response.bytes_stream();
     while let Some(stream_result) = worker.runtime.block_on(stream.next()) {
         // Get next chunk of bytes from stream
-        let bytes = stream_result.map_err(|why| why.to_string())?;
+        let bytes = stream_result?;
 
         // Write the bytes to the file
         file.write_all(&bytes).map_err(|why| why.to_string())?;
@@ -79,20 +69,17 @@ pub fn memory_file<F>(
     worker: &PatchWorker,
     url: reqwest::Url,
     callback: F,
-) -> Result<Vec<u8>, String>
+) -> Result<Vec<u8>, Box<dyn Error>>
 where
     F: Fn(u64, Option<u64>), /* downloaded bytes, total bytes */
 {
     // Request URL
-    let response = worker
-        .runtime
-        .block_on(worker.client.get(url).send())
-        .map_err(|why| why.to_string())?;
+    let response = worker.runtime.block_on(worker.client.get(url).send())?;
 
     // Check response status
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("URL request failed: {status}"));
+        return Err(format!("URL request failed: {status}").into());
     }
 
     // Keep track of the total size and the number of bytes downloaded so far.
@@ -128,20 +115,13 @@ where
 }
 
 /// Downloads a file and returns the resulting bytes
-pub fn patch(worker: &PatchWorker, net_file: reqwest::Url) -> Result<Vec<u8>, String> {
-    let data = match memory_file(worker, net_file, |_, _| {}) {
-        Ok(data) => data,
-        Err(why) => {
-            worker.send_error("Failed to download patch".to_string());
-            return Err(why);
-        }
-    };
-
+pub fn patch(worker: &PatchWorker, net_file: reqwest::Url) -> Result<Vec<u8>, Box<dyn Error>> {
+    let data = memory_file(worker, net_file, |_, _| {})?;
     Ok(data)
 }
 
-pub fn game_base(worker: &PatchWorker) -> Result<File, String> {
-    let result = temp_file(worker, worker.game_zip_url.clone(), |downloaded, total| {
+pub fn game_base(worker: &PatchWorker) -> Result<File, Box<dyn Error>> {
+    temp_file(worker, worker.game_zip_url.clone(), |downloaded, total| {
         let pretty_downloaded = byte_string(downloaded);
         if let Some(total) = total {
             let downloaded = downloaded.min(total);
@@ -154,17 +134,11 @@ pub fn game_base(worker: &PatchWorker) -> Result<File, String> {
         } else {
             worker.send_download(format!("Downloading base game ({pretty_downloaded})"), 1.);
         }
-    });
-
-    if result.is_err() {
-        worker.send_error("Failed to download base game".to_string());
-    }
-
-    result
+    })
 }
 
 /// Downloads the patchlist and returns the parsed result
-pub fn patch_metadata(worker: &PatchWorker) -> Result<Directory, String> {
+pub fn patch_metadata(worker: &PatchWorker) -> Result<Directory, PatchError> {
     let result = memory_file(worker, worker.patchlist_url.clone(), |downloaded, total| {
         let pretty_downloaded = byte_string(downloaded);
         if let Some(total) = total {
@@ -180,21 +154,10 @@ pub fn patch_metadata(worker: &PatchWorker) -> Result<Directory, String> {
         }
     });
 
-    let json_bytes = match result {
-        Ok(data) => data,
-        Err(why) => {
-            worker.send_error("Failed to get patch info".to_string());
-            return Err(why);
-        }
-    };
+    let json_bytes = result.map_err(|why| why.to_patch_error("Failed to get patch info"))?;
 
-    let patch_dir = match serde_json::from_slice::<Directory>(&json_bytes) {
-        Ok(p) => p,
-        Err(why) => {
-            worker.send_error("Failed to parse patch info".to_string());
-            return Err(why.to_string());
-        }
-    };
+    let patch_dir = serde_json::from_slice::<Directory>(&json_bytes)
+        .map_err(|why| why.to_patch_error("Failed to parse patch info"))?;
 
     Ok(patch_dir)
 }

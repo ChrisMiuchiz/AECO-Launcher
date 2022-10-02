@@ -1,7 +1,7 @@
 pub enum PatchMessage {
     Error(String),
     Downloading(String, f32),
-    Connecting(String),
+    Info(String),
     PatchStatus(PatchStatus),
 }
 

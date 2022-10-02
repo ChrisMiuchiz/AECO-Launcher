@@ -138,7 +138,7 @@ impl PatcherUI {
                 PatchMessage::Downloading(message, progress) => {
                     self.progress_bar_state = ProgressBarState::Downloading(message, progress);
                 }
-                PatchMessage::Connecting(message) => {
+                PatchMessage::Info(message) => {
                     self.progress_bar_state = ProgressBarState::Connecting(message);
                 }
                 PatchMessage::PatchStatus(status) => {

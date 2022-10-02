@@ -1,9 +1,11 @@
 use super::constants::*;
 use super::download;
+use super::error::{PatchError, PatchErrorLevel, ToPatchError};
 use super::utils::{byte_string, get_platform};
 use crate::message::{GUIMessage, PatchMessage, PatchStatus};
 use aeco_patch_config::fsobject::*;
 use aeco_patch_config::status::ServerStatus;
+use std::error::Error;
 use std::{
     path::{Path, PathBuf},
     sync::mpsc::{Receiver, Sender},
@@ -80,6 +82,7 @@ impl PatchWorker {
 
     /// Send an error to the GUI
     pub fn send_error(&self, text: String) {
+        self.send_status(PatchStatus::Error);
         self.send(PatchMessage::Error(text));
     }
 
@@ -88,9 +91,9 @@ impl PatchWorker {
         self.send(PatchMessage::Downloading(text, percentage));
     }
 
-    /// Send connecting information to the GUI
-    pub fn send_connecting(&self, text: String) {
-        self.send(PatchMessage::Connecting(text));
+    /// Send misc information to the GUI
+    pub fn send_info(&self, text: String) {
+        self.send(PatchMessage::Info(text));
     }
 
     /// Send information about the result of the patch routine to the GUI
@@ -119,8 +122,17 @@ impl PatchWorker {
                 GUIMessage::Retry => {
                     self.send_status(PatchStatus::Working);
                     if let Err(why) = self.patch_routine() {
+                        // Communicate error status to the GUI
                         self.send_status(PatchStatus::Error);
-                        eprintln!("{why}");
+
+                        // Display error message
+                        match why.level {
+                            PatchErrorLevel::Low => self.send_info(why.friendly_message),
+                            PatchErrorLevel::High => self.send_error(why.friendly_message),
+                        }
+
+                        // Log more detailed error info to the terminal
+                        eprintln!("{:?}", why.internal_error);
                     }
                 }
                 GUIMessage::Play => {
@@ -150,17 +162,19 @@ impl PatchWorker {
         }
     }
 
-    fn patch_routine(&mut self) -> Result<(), String> {
+    fn patch_routine(&mut self) -> Result<(), PatchError> {
         self.check_patcher_aecoupdate()?;
 
-        self.send_connecting("Checking server status".to_string());
+        self.send_info("Checking server status".to_string());
         let server_status = download::server_status(self)?;
 
         match server_status {
-            ServerStatus::Online => self.send_connecting("Server is online".to_string()),
+            ServerStatus::Online => self.send_info("Server is online".to_string()),
             ServerStatus::Maintenance => {
-                self.send_connecting("Server is down for maintenance".to_string());
-                return Err("Server is down for maintenance".to_string());
+                return Err(Box::<dyn Error>::from(format!(
+                    "Received server status {server_status:?}"
+                ))
+                .to_patch_error_level("Server is down for maintenance", PatchErrorLevel::Low));
             }
         }
 
@@ -174,7 +188,9 @@ impl PatchWorker {
         for platform in ["all", &get_platform()] {
             // Compare local files against the patch data, and update files if needed
             if let Some(platform_dir) = subdir_by_name(&patch, platform) {
-                self.check_platform_patches(platform_dir)?;
+                self.check_platform_patches(platform_dir).map_err(|why| {
+                    why.to_patch_error(&format!("Failed to check files for platform '{platform}'"))
+                })?;
             } else {
                 println!("No patch directory found for platform \'{platform}\'");
             }
@@ -191,8 +207,7 @@ impl PatchWorker {
                     std::process::exit(0);
                 }
                 Err(why) => {
-                    self.send_error("Could not start updated launcher".to_string());
-                    return Err(format!("Could not start updated launcher: {}", why));
+                    return Err(why.to_patch_error("Could not start updated launcher"));
                 }
             }
         }
@@ -207,14 +222,9 @@ impl PatchWorker {
     }
 
     /// Unpacks the base game ZIP to the same directory as this program
-    fn unpack_base(&self, base_file: std::fs::File) -> Result<(), String> {
-        let mut archive = match zip::read::ZipArchive::new(base_file) {
-            Ok(a) => a,
-            Err(why) => {
-                self.send_error("Failed to extract base game".to_string());
-                return Err(why.to_string());
-            }
-        };
+    fn unpack_base(&self, base_file: std::fs::File) -> Result<(), Box<dyn Error>> {
+        // Open base game archive
+        let mut archive = zip::read::ZipArchive::new(base_file)?;
 
         self.send_download("Extracting base game".to_string(), 0.);
 
@@ -225,18 +235,16 @@ impl PatchWorker {
         // Calculate the total number of bytes to be extracted
         let mut total_archive_bytes = 0;
         for file_number in 0..total_archive_count {
-            let file = match archive.by_index(file_number) {
-                Ok(f) => f,
-                Err(why) => {
-                    self.send_error("Failed to read base game".to_string());
-                    return Err(why.to_string());
-                }
-            };
+            let file = archive.by_index(file_number)?;
             total_archive_bytes += file.size();
         }
 
+        // Get total number of bytes as a human readable string
         let pretty_total = byte_string(total_archive_bytes);
+
+        // Keep track of how many bytes have been decompressed so far
         let mut decompressed_bytes = 0;
+
         for file_number in 0..total_archive_count {
             // Report progress in terms of bytes extracted
             let progress = decompressed_bytes as f32 / total_archive_bytes as f32;
@@ -250,64 +258,39 @@ impl PatchWorker {
                 progress,
             );
 
-            let mut file = match archive.by_index(file_number) {
-                Ok(f) => f,
-                Err(why) => {
-                    self.send_error("Failed to extract base game".to_string());
-                    return Err(why.to_string());
-                }
-            };
+            // Get the next file from the archive
+            let mut file = archive.by_index(file_number)?;
 
-            let filepath = match file.enclosed_name() {
-                Some(x) => x,
-                None => {
-                    self.send_error("Failed to extract base game:\nInvalid file path".to_string());
-                    return Err("Invalid file path".to_string());
-                }
-            };
-
+            // Get its path and figure out where it should go on the system
+            let filepath = file.enclosed_name().ok_or("Invalid file path")?;
             let outpath = self.self_dir.join(filepath);
 
             if file.name().ends_with('/') {
-                if let Err(why) = std::fs::create_dir_all(&outpath) {
-                    self.send_error("Failed to extract base game".to_string());
-                    return Err(why.to_string());
-                }
+                // Create directories if needed
+                std::fs::create_dir_all(&outpath)?;
             } else {
+                // Create parent directories if needed
                 if let Some(p) = outpath.parent() {
                     if !p.exists() {
-                        if let Err(why) = std::fs::create_dir_all(&p) {
-                            self.send_error("Failed to extract base game".to_string());
-                            return Err(why.to_string());
-                        }
+                        std::fs::create_dir_all(&p)?;
                     }
                 }
-                let mut outfile = match std::fs::File::create(&outpath) {
-                    Ok(f) => f,
-                    Err(why) => {
-                        self.send_error("Failed to extract base game".to_string());
-                        return Err(why.to_string());
-                    }
-                };
-                if let Err(why) = std::io::copy(&mut file, &mut outfile) {
-                    self.send_error("Failed to extract base game".to_string());
-                    return Err(why.to_string());
-                }
+
+                // Copy extracted file to disk
+                let mut outfile = std::fs::File::create(&outpath)?;
+                std::io::copy(&mut file, &mut outfile)?;
             }
+
             // Get and Set permissions
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 if let Some(mode) = file.unix_mode() {
-                    if let Err(why) =
-                        std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode))
-                    {
-                        self.send_error("Failed to extract base game".to_string());
-                        return Err(why.to_string());
-                    }
+                    std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode))?;
                 }
             }
 
+            // Keep track of how many bytes have been extracted so far
             decompressed_bytes += file.size();
         }
 
@@ -317,45 +300,44 @@ impl PatchWorker {
     }
 
     /// Checks whether the game is installed and installs it if not
-    fn ensure_game_installed(&self) -> Result<(), String> {
+    fn ensure_game_installed(&self) -> Result<(), PatchError> {
         self.send_download("Checking game installation".to_string(), 1.);
         if !self.is_game_present() {
-            println!("Downloading game since it is not installed.");
-            let game_base_file = download::game_base(self)?;
-            self.unpack_base(game_base_file)?;
+            self.send_download("Downloading game since it is not installed".to_string(), 0.);
+
+            // Download the base game
+            let game_base_file = download::game_base(self)
+                .map_err(|why| why.to_patch_error("Failed while downloading base game"))?;
+
+            // Extract the base game to disk
+            self.unpack_base(game_base_file)
+                .map_err(|why| why.to_patch_error("Failed while unpacking base game"))?;
         }
 
         Ok(())
     }
 
     /// Checks files to be patched, patching them if necessary
-    fn check_platform_patches(&mut self, dir: &Directory) -> Result<(), String> {
+    fn check_platform_patches(&mut self, dir: &Directory) -> Result<(), Box<dyn Error>> {
         let check_platform = &dir.name;
 
         // The URL to start at needs to be patch/platform because that is where
         // platform specific files are stored
-        let platform_net_path = self
-            .patch_url
-            .join(&format!("{check_platform}/"))
-            .map_err(|why| why.to_string())?;
+        let platform_net_path = self.patch_url.join(&format!("{check_platform}/"))?;
 
         let total_files = get_total_files_in_patch(dir);
         let disk_dir = self.self_dir.clone();
-        let checked_files = match self.check_patches_dir(
+        let checked_files = self.check_patches_dir(
             dir,
             disk_dir,
             platform_net_path,
             check_platform,
             0,
             total_files,
-        ) {
-            Ok(n) => n,
-            Err(why) => {
-                self.send_error("Failed to check local files".to_string());
-                return Err(why);
-            }
-        };
+        )?;
 
+        // All files should have been checked, but it is not fatal if these
+        // values do not match
         if checked_files != total_files {
             eprintln!(
                 "Checked files: {checked_files}; total files: {total_files}. These should match."
@@ -376,7 +358,7 @@ impl PatchWorker {
         platform: &str,
         completed_files: usize,
         total_files: usize,
-    ) -> Result<usize, String>
+    ) -> Result<usize, Box<dyn Error>>
     where
         P: AsRef<Path>,
     {
@@ -386,7 +368,7 @@ impl PatchWorker {
                 FSObject::File(file) => self.check_patches_file(
                     file,
                     disk_dir.as_ref().join(&file.name),
-                    net_path.join(&file.name).map_err(|why| why.to_string())?,
+                    net_path.join(&file.name)?,
                     platform,
                     completed_files,
                     total_files,
@@ -394,9 +376,7 @@ impl PatchWorker {
                 FSObject::Directory(d) => self.check_patches_dir(
                     d,
                     disk_dir.as_ref().join(&d.name),
-                    net_path
-                        .join(&format!("{}/", &d.name)) // Dir URLS need / to be parsed correctly
-                        .map_err(|why| why.to_string())?,
+                    net_path.join(&format!("{}/", &d.name))?, // Dir URLS need / to be parsed correctly
                     platform,
                     completed_files,
                     total_files,
@@ -406,9 +386,7 @@ impl PatchWorker {
                     disk_dir.as_ref().join(&a.name).with_extension("hed"),
                     disk_dir.as_ref().join(&a.name).with_extension("dat"),
                     // Dir URLs need / to be parsed correctly, and archives are stored online as .archive
-                    net_path
-                        .join(&format!("{}.archive/", &a.name))
-                        .map_err(|why| why.to_string())?,
+                    net_path.join(&format!("{}.archive/", &a.name))?,
                     platform,
                     completed_files,
                     total_files,
@@ -428,7 +406,7 @@ impl PatchWorker {
         platform: &str,
         mut completed_files: usize,
         total_files: usize,
-    ) -> Result<usize, String>
+    ) -> Result<usize, Box<dyn Error>>
     where
         P: AsRef<Path>,
     {
@@ -448,10 +426,10 @@ impl PatchWorker {
         if !file_to_write.exists() {
             println!("Downloading new file {net_file} -> {:?}", &file_to_write);
             let file_bytes = download::patch(self, net_file)?;
-            std::fs::write(file_to_write, file_bytes).map_err(|why| why.to_string())?;
+            std::fs::write(file_to_write, file_bytes)?;
         } else {
             let file_matches = {
-                let disk_data = std::fs::read(&file_to_check).map_err(|why| why.to_string())?;
+                let disk_data = std::fs::read(&file_to_check)?;
                 let disk_file_data = File::new(&file.name, &disk_data);
                 file.digest == disk_file_data.digest
             };
@@ -468,13 +446,13 @@ impl PatchWorker {
             if !file_matches {
                 println!("Updating {net_file} -> {:?}", &file_to_write);
                 let file_bytes = download::patch(self, net_file)?;
-                std::fs::write(&file_to_write, file_bytes).map_err(|why| why.to_string())?;
+                std::fs::write(&file_to_write, file_bytes)?;
                 // If we got the file successfully, and it is a replacement for
                 // this program, save the path to the new one for later so we
                 // can switch to it.
                 if is_self {
                     // Make sure the file is exectuable on unixlike systems
-                    set_executable(&file_to_write).map_err(|why| why.to_string())?;
+                    set_executable(&file_to_write)?;
                     self.updated_patcher = Some(file_to_write);
                 }
             }
@@ -495,7 +473,7 @@ impl PatchWorker {
         platform: &str,
         completed_files: usize,
         total_files: usize,
-    ) -> Result<usize, String>
+    ) -> Result<usize, Box<dyn Error>>
     where
         P1: AsRef<Path>,
         P2: AsRef<Path>,
@@ -529,12 +507,13 @@ impl PatchWorker {
                 }
                 Err(_) => {
                     // Some other error happened
-                    return Err(format!("Failed while reading {}", archive.name));
+                    // TODO: ArchiveError should impl Error
+                    return Err(format!("Failed while reading {}", archive.name).into());
                 }
             };
 
             if !file_matches {
-                let new_file_url = net_path.join(&file.name).map_err(|why| why.to_string())?;
+                let new_file_url = net_path.join(&file.name)?;
                 println!(
                     "Downloading {new_file_url} -> {:?} / {:?}",
                     dat_path.as_ref(),
@@ -562,19 +541,20 @@ impl PatchWorker {
         Ok(completed_files)
     }
 
-    fn start_game(&self) -> Result<(), String> {
+    fn start_game(&self) -> Result<(), Box<dyn Error>> {
         self.send_download("Let's play the game!".to_string(), 1.);
 
         Ok(())
     }
 
-    fn check_patcher_aecoupdate(&self) -> Result<(), String> {
+    fn check_patcher_aecoupdate(&self) -> Result<(), PatchError> {
         // Get current extension, or finish if there is none
         let extension = match self.self_exe.extension() {
             Some(ext) => ext,
             None => {
                 // Remove aecoupdate launcher if there is one
-                self.remove_aecoupdate_file()?;
+                self.remove_aecoupdate_file()
+                    .map_err(|why| why.to_patch_error("Failed to remove temporary launcher"))?;
                 return Ok(());
             }
         };
@@ -601,8 +581,7 @@ impl PatchWorker {
         for retry in 1..=retries {
             if let Err(why) = std::fs::copy(&self.self_exe, &new_file_path) {
                 if retry == retries {
-                    self.send_error("Failed to overwrite old patcher".to_string());
-                    return Err(format!("Failed to overwrite patcher: {why}"));
+                    return Err(why.to_patch_error("Failed to overwrite patcher"));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(250));
             } else {
@@ -611,7 +590,8 @@ impl PatchWorker {
         }
 
         // Make sure the file is executable on unixlike systems
-        set_executable(&new_file_path).map_err(|why| why.to_string())?;
+        set_executable(&new_file_path)
+            .map_err(|why| why.to_patch_error("Failed to make patcher executable"))?;
 
         // Open the restored launcher and close this one
         match subprocess::Popen::create(&[new_file_path], subprocess::PopenConfig::default()) {
@@ -621,13 +601,12 @@ impl PatchWorker {
                 std::process::exit(0)
             }
             Err(why) => {
-                self.send_error("Could not start overwritten launcher".to_string());
-                Err(format!("Could not start overwritten launcher: {why}"))
+                Err(why.to_patch_error("Failed to start new launcher"))
             }
         }
     }
 
-    fn remove_aecoupdate_file(&self) -> Result<(), String> {
+    fn remove_aecoupdate_file(&self) -> Result<(), Box<dyn Error>> {
         let path = self.get_self_aecoupdate_path()?;
         if path.exists() {
             // Try a few times, it is possible that the old process hasn't shut
@@ -636,8 +615,7 @@ impl PatchWorker {
             for retry in 1..=retries {
                 if let Err(why) = std::fs::remove_file(&path) {
                     if retry == retries {
-                        self.send_error("Failed to remove temporary launcher.".to_string());
-                        return Err(format!("Failed to remove temporary launcher: {why}"));
+                        return Err(why.into());
                     }
                     std::thread::sleep(std::time::Duration::from_millis(250));
                 } else {
@@ -649,7 +627,7 @@ impl PatchWorker {
         Ok(())
     }
 
-    fn get_self_aecoupdate_path(&self) -> Result<PathBuf, String> {
+    fn get_self_aecoupdate_path(&self) -> Result<PathBuf, Box<dyn Error>> {
         let current_name = self
             .self_exe
             .file_name()
