@@ -1,10 +1,10 @@
 use super::constants::*;
+use super::download;
+use super::utils::{byte_string, get_platform};
 use crate::message::{GUIMessage, PatchMessage, PatchStatus};
 use aeco_patch_config::fsobject::*;
 use aeco_patch_config::status::ServerStatus;
-use futures_util::StreamExt;
 use std::{
-    io::Write,
     path::{Path, PathBuf},
     sync::mpsc::{Receiver, Sender},
 };
@@ -14,17 +14,17 @@ const UPDATE_FILE_EXTENSION: &str = "aecoupdate";
 pub struct PatchWorker {
     tx: Sender<PatchMessage>,
     rx: Receiver<GUIMessage>,
-    self_dir: PathBuf,
-    self_exe: PathBuf,
-    client: reqwest::Client,
-    server_url: reqwest::Url,
-    game_base_url: reqwest::Url,
-    game_zip_url: reqwest::Url,
-    patchlist_url: reqwest::Url,
-    status_url: reqwest::Url,
-    patch_url: reqwest::Url,
-    runtime: tokio::runtime::Runtime,
-    updated_patcher: Option<PathBuf>,
+    pub self_dir: PathBuf,
+    pub self_exe: PathBuf,
+    pub client: reqwest::Client,
+    pub server_url: reqwest::Url,
+    pub game_base_url: reqwest::Url,
+    pub game_zip_url: reqwest::Url,
+    pub patchlist_url: reqwest::Url,
+    pub status_url: reqwest::Url,
+    pub patch_url: reqwest::Url,
+    pub runtime: tokio::runtime::Runtime,
+    pub updated_patcher: Option<PathBuf>,
 }
 
 impl PatchWorker {
@@ -79,22 +79,22 @@ impl PatchWorker {
     }
 
     /// Send an error to the GUI
-    fn send_error(&self, text: String) {
+    pub fn send_error(&self, text: String) {
         self.send(PatchMessage::Error(text));
     }
 
     /// Send download information to the GUI
-    fn send_download(&self, text: String, percentage: f32) {
+    pub fn send_download(&self, text: String, percentage: f32) {
         self.send(PatchMessage::Downloading(text, percentage));
     }
 
     /// Send connecting information to the GUI
-    fn send_connecting(&self, text: String) {
+    pub fn send_connecting(&self, text: String) {
         self.send(PatchMessage::Connecting(text));
     }
 
     /// Send information about the result of the patch routine to the GUI
-    fn send_status(&self, status: PatchStatus) {
+    pub fn send_status(&self, status: PatchStatus) {
         self.send(PatchMessage::PatchStatus(status));
         self.clear_recv();
     }
@@ -154,7 +154,7 @@ impl PatchWorker {
         self.check_patcher_aecoupdate()?;
 
         self.send_connecting("Checking server status".to_string());
-        let server_status = self.download_server_status()?;
+        let server_status = download::server_status(self)?;
 
         match server_status {
             ServerStatus::Online => self.send_connecting("Server is online".to_string()),
@@ -168,7 +168,7 @@ impl PatchWorker {
         self.ensure_game_installed()?;
 
         // Get patch information from the patch server
-        let patch = self.download_patch_metadata()?;
+        let patch = download::patch_metadata(self)?;
 
         // Apply patches for all platforms and for this specific platform
         for platform in ["all", &get_platform()] {
@@ -204,73 +204,6 @@ impl PatchWorker {
     fn is_game_present(&self) -> bool {
         let game_path = self.self_dir.join(GAME_EXE);
         game_path.is_file()
-    }
-
-    /// Downloads the base game and returns it in a temporary file
-    fn download_base(&self) -> Result<std::fs::File, String> {
-        let response = match self
-            .runtime
-            .block_on(self.client.get(self.game_zip_url.clone()).send())
-        {
-            Ok(x) => x,
-            Err(why) => {
-                self.send_error("Failed to download game base".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        let status = response.status();
-        if !status.is_success() {
-            self.send_error("Failed to download game base".to_string());
-            return Err(status.to_string());
-        }
-
-        let mut file = match tempfile::tempfile_in(&self.self_dir) {
-            Ok(x) => x,
-            Err(why) => {
-                self.send_error("Failed to create game base".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        let total_size = response.content_length();
-        let mut downloaded_size = 0u64;
-
-        let mut stream = response.bytes_stream();
-
-        while let Some(stream_result) = self.runtime.block_on(stream.next()) {
-            let bytes = match stream_result {
-                Ok(x) => x,
-                Err(why) => {
-                    self.send_error("Failed while reading game base stream".to_string());
-                    return Err(why.to_string());
-                }
-            };
-
-            if let Err(why) = file.write_all(&bytes) {
-                self.send_error("Failed while writing base game to disk".to_string());
-                return Err(why.to_string());
-            }
-
-            downloaded_size += bytes.len() as u64;
-            let pretty_downloaded = byte_string(downloaded_size);
-
-            if let Some(total_size) = total_size {
-                downloaded_size = downloaded_size.min(total_size);
-                let progress = downloaded_size as f32 / total_size as f32;
-                let pretty_total = byte_string(total_size);
-                self.send_download(
-                    format!("Downloading base game ({pretty_downloaded} / {pretty_total})"),
-                    progress,
-                );
-            } else {
-                self.send_download(format!("Downloading base game ({pretty_downloaded})"), 1.);
-            }
-        }
-
-        self.send_download("Finished downloading base game".to_string(), 1.);
-
-        Ok(file)
     }
 
     /// Unpacks the base game ZIP to the same directory as this program
@@ -388,86 +321,11 @@ impl PatchWorker {
         self.send_download("Checking game installation".to_string(), 1.);
         if !self.is_game_present() {
             println!("Downloading game since it is not installed.");
-            let base_file = self.download_base()?;
-            self.unpack_base(base_file)?;
+            let game_base_file = download::game_base(self)?;
+            self.unpack_base(game_base_file)?;
         }
 
         Ok(())
-    }
-
-    fn download_server_status(&self) -> Result<ServerStatus, String> {
-        let response = match self
-            .runtime
-            .block_on(self.client.get(self.status_url.clone()).send())
-        {
-            Ok(x) => x,
-            Err(why) => {
-                self.send_error("Failed to get server status".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        let statuscode = response.status();
-        if !statuscode.is_success() {
-            self.send_error("Failed to get server status".to_string());
-            return Err(statuscode.to_string());
-        }
-
-        let json_bytes = match self.runtime.block_on(response.bytes()) {
-            Ok(b) => b,
-            Err(why) => {
-                self.send_error("Failed to get server status".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        let server_status = match serde_json::from_slice::<ServerStatus>(&json_bytes) {
-            Ok(p) => p,
-            Err(why) => {
-                self.send_error("Failed to parse server status".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        Ok(server_status)
-    }
-
-    /// Downloads the patchlist and returns the parsed result
-    fn download_patch_metadata(&self) -> Result<Directory, String> {
-        let response = match self
-            .runtime
-            .block_on(self.client.get(self.patchlist_url.clone()).send())
-        {
-            Ok(x) => x,
-            Err(why) => {
-                self.send_error("Failed to get patch data".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        let status = response.status();
-        if !status.is_success() {
-            self.send_error("Failed to get patch data".to_string());
-            return Err(status.to_string());
-        }
-
-        let json_bytes = match self.runtime.block_on(response.bytes()) {
-            Ok(b) => b,
-            Err(why) => {
-                self.send_error("Failed to get patch data".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        let patch_dir = match serde_json::from_slice::<Directory>(&json_bytes) {
-            Ok(p) => p,
-            Err(why) => {
-                self.send_error("Failed to parse patch data".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        Ok(patch_dir)
     }
 
     /// Checks files to be patched, patching them if necessary
@@ -589,7 +447,7 @@ impl PatchWorker {
 
         if !file_to_write.exists() {
             println!("Downloading new file {net_file} -> {:?}", &file_to_write);
-            let file_bytes = self.download_patched_file(net_file)?;
+            let file_bytes = download::patch(self, net_file)?;
             std::fs::write(file_to_write, file_bytes).map_err(|why| why.to_string())?;
         } else {
             let file_matches = {
@@ -609,7 +467,7 @@ impl PatchWorker {
 
             if !file_matches {
                 println!("Updating {net_file} -> {:?}", &file_to_write);
-                let file_bytes = self.download_patched_file(net_file)?;
+                let file_bytes = download::patch(self, net_file)?;
                 std::fs::write(&file_to_write, file_bytes).map_err(|why| why.to_string())?;
                 // If we got the file successfully, and it is a replacement for
                 // this program, save the path to the new one for later so we
@@ -681,7 +539,7 @@ impl PatchWorker {
                     dat_path.as_ref(),
                     hed_path.as_ref()
                 );
-                let new_file_bytes = self.download_patched_file(new_file_url)?;
+                let new_file_bytes = download::patch(self, new_file_url)?;
                 disk_archive
                     .add_file(&file.name, &new_file_bytes)
                     .map_err(|_| format!("Couldn't write to archive {}", &archive.name))?;
@@ -701,33 +559,6 @@ impl PatchWorker {
         }
 
         Ok(completed_files)
-    }
-
-    /// Downloads a file and returns the resulting bytes
-    fn download_patched_file(&self, net_file: reqwest::Url) -> Result<Vec<u8>, String> {
-        let response = match self.runtime.block_on(self.client.get(net_file).send()) {
-            Ok(x) => x,
-            Err(why) => {
-                self.send_error("Failed to get patched file".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        let status = response.status();
-        if !status.is_success() {
-            self.send_error("Failed to get patched file".to_string());
-            return Err(status.to_string());
-        }
-
-        let bytes = match self.runtime.block_on(response.bytes()) {
-            Ok(b) => b,
-            Err(why) => {
-                self.send_error("Failed to get patched file".to_string());
-                return Err(why.to_string());
-            }
-        };
-
-        Ok(bytes.to_vec())
     }
 
     fn start_game(&self) -> Result<(), String> {
@@ -838,14 +669,6 @@ fn subdir_by_name<'a>(dir: &'a Directory, name: &str) -> Option<&'a Directory> {
     None
 }
 
-/// Gets a platform string to represent the current platform
-/// Some examples: `windows-x86_64`, `linux-x86`, `macos-aarch64`
-fn get_platform() -> String {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    format!("{os}-{arch}")
-}
-
 fn get_total_files_in_patch(dir: &Directory) -> usize {
     let mut total_files = 0;
 
@@ -858,14 +681,4 @@ fn get_total_files_in_patch(dir: &Directory) -> usize {
     }
 
     total_files
-}
-
-/// Format a quantity of bytes into a human readable string
-fn byte_string<T>(bytes: T) -> String
-where
-    T: Into<u128>,
-{
-    byte_unit::Byte::from_bytes(bytes.into())
-        .get_appropriate_unit(true) // binary units
-        .to_string()
 }
