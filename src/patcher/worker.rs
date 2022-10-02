@@ -9,6 +9,8 @@ use std::{
     sync::mpsc::{Receiver, Sender},
 };
 
+const UPDATE_FILE_EXTENSION: &str = "aecoupdate";
+
 pub struct PatchWorker {
     tx: Sender<PatchMessage>,
     rx: Receiver<GUIMessage>,
@@ -22,6 +24,7 @@ pub struct PatchWorker {
     status_url: reqwest::Url,
     patch_url: reqwest::Url,
     runtime: tokio::runtime::Runtime,
+    updated_patcher: Option<PathBuf>,
 }
 
 impl PatchWorker {
@@ -64,6 +67,7 @@ impl PatchWorker {
             status_url,
             patch_url,
             runtime,
+            updated_patcher: None,
         })
     }
 
@@ -103,11 +107,11 @@ impl PatchWorker {
         while self.rx.try_recv().is_ok() {}
     }
 
-    pub fn run(&self) {
+    pub fn run(&mut self) {
         self.main_loop();
     }
 
-    fn main_loop(&self) {
+    fn main_loop(&mut self) {
         // Start by performing the patch check
         let mut message = GUIMessage::Retry;
         loop {
@@ -146,7 +150,9 @@ impl PatchWorker {
         }
     }
 
-    fn patch_routine(&self) -> Result<(), String> {
+    fn patch_routine(&mut self) -> Result<(), String> {
+        self.check_patcher_aecoupdate()?;
+
         self.send_connecting("Checking server status".to_string());
         let server_status = self.download_server_status()?;
 
@@ -175,6 +181,21 @@ impl PatchWorker {
         }
 
         self.send_status(PatchStatus::Finished);
+
+        // Open the new patcher if there is one
+        if let Some(p) = &self.updated_patcher {
+            match subprocess::Popen::create(&[p], subprocess::PopenConfig::default()) {
+                Ok(mut popen) => {
+                    // End current patcher
+                    popen.detach();
+                    std::process::exit(0);
+                }
+                Err(why) => {
+                    self.send_error("Could not start updated launcher".to_string());
+                    return Err(format!("Could not start updated launcher: {}", why));
+                }
+            }
+        }
 
         Ok(())
     }
@@ -450,7 +471,7 @@ impl PatchWorker {
     }
 
     /// Checks files to be patched, patching them if necessary
-    fn check_platform_patches(&self, dir: &Directory) -> Result<(), String> {
+    fn check_platform_patches(&mut self, dir: &Directory) -> Result<(), String> {
         let check_platform = &dir.name;
 
         // The URL to start at needs to be patch/platform because that is where
@@ -461,9 +482,10 @@ impl PatchWorker {
             .map_err(|why| why.to_string())?;
 
         let total_files = get_total_files_in_patch(dir);
+        let disk_dir = self.self_dir.clone();
         let checked_files = match self.check_patches_dir(
             dir,
-            &self.self_dir,
+            disk_dir,
             platform_net_path,
             check_platform,
             0,
@@ -489,7 +511,7 @@ impl PatchWorker {
 
     /// Iterates through a directory for files to be patched
     fn check_patches_dir<P>(
-        &self,
+        &mut self,
         dir: &Directory,
         disk_dir: P,
         net_path: reqwest::Url,
@@ -541,18 +563,19 @@ impl PatchWorker {
 
     /// Checks whether a file should be patched, patching it if necessary
     fn check_patches_file<P>(
-        &self,
+        &mut self,
         file: &File,
         disk_file: P,
         net_file: reqwest::Url,
         platform: &str,
-        completed_files: usize,
+        mut completed_files: usize,
         total_files: usize,
     ) -> Result<usize, String>
     where
         P: AsRef<Path>,
     {
-        let mut completed_files = completed_files;
+        let file_to_check = disk_file.as_ref();
+        let mut file_to_write = file_to_check.to_path_buf();
 
         let progress = completed_files as f32 / total_files as f32;
         self.send_download(
@@ -564,24 +587,37 @@ impl PatchWorker {
             progress,
         );
 
-        if !disk_file.as_ref().exists() {
-            println!(
-                "Downloading new file {net_file} -> {:?}",
-                disk_file.as_ref()
-            );
+        if !file_to_write.exists() {
+            println!("Downloading new file {net_file} -> {:?}", &file_to_write);
             let file_bytes = self.download_patched_file(net_file)?;
-            std::fs::write(disk_file, file_bytes).map_err(|why| why.to_string())?;
+            std::fs::write(file_to_write, file_bytes).map_err(|why| why.to_string())?;
         } else {
             let file_matches = {
-                let disk_data = std::fs::read(&disk_file).map_err(|why| why.to_string())?;
+                let disk_data = std::fs::read(&file_to_check).map_err(|why| why.to_string())?;
                 let disk_file_data = File::new(&file.name, &disk_data);
                 file.digest == disk_file_data.digest
             };
 
+            let is_self = file_to_check == self.self_exe;
+
+            // If the patched file is this program, don't try to overwrite it
+            // while it is running. Instead, save it as a different file name
+            // and move it later.
+            if is_self {
+                file_to_write = self.get_self_aecoupdate_path()?;
+            }
+
             if !file_matches {
-                println!("Updating {net_file} -> {:?}", disk_file.as_ref());
+                println!("Updating {net_file} -> {:?}", &file_to_write);
                 let file_bytes = self.download_patched_file(net_file)?;
-                std::fs::write(disk_file, file_bytes).map_err(|why| why.to_string())?;
+                std::fs::write(&file_to_write, file_bytes).map_err(|why| why.to_string())?;
+                // If we got the file successfully, and it is a replacement for
+                // this program, save the path to the new one for later so we
+                // can switch to it.
+                // TODO: make sure the file is executable on unix
+                if is_self {
+                    self.updated_patcher = Some(file_to_write);
+                }
             }
         }
 
@@ -701,6 +737,95 @@ impl PatchWorker {
         self.send_download("Let's play the game!".to_string(), 1.);
 
         Ok(())
+    }
+
+    fn check_patcher_aecoupdate(&self) -> Result<(), String> {
+        // Get current extension, or finish if there is none
+        let extension = match self.self_exe.extension() {
+            Some(ext) => ext,
+            None => {
+                // Remove aecoupdate launcher if there is one
+                self.remove_aecoupdate_file()?;
+                return Ok(());
+            }
+        };
+
+        // Finish if the current extension isn't the update extension
+        if extension != UPDATE_FILE_EXTENSION {
+            return Ok(());
+        }
+
+        // Remove the extension
+        // This only removes the last extension, so if the file is supposed to
+        // have an extension (e.g. ".exe") that part will remain, and it will
+        // become the new extension
+        let new_file_path = {
+            let mut path = self.self_exe.clone();
+            path.set_extension("");
+            path
+        };
+
+        // Copy this program to the normal program filename
+        // Try a few times, it is possible that the old process hasn't shut
+        // down yet
+        let retries = 5;
+        for retry in 1..=retries {
+            if let Err(why) = std::fs::copy(&self.self_exe, &new_file_path) {
+                if retry == retries {
+                    self.send_error("Failed to overwrite old patcher".to_string());
+                    return Err(format!("Failed to overwrite patcher: {why}"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            } else {
+                break;
+            }
+        }
+
+        // Open the restored launcher and close this one
+        match subprocess::Popen::create(&[new_file_path], subprocess::PopenConfig::default()) {
+            Ok(mut popen) => {
+                // End current patcher
+                popen.detach();
+                std::process::exit(0);
+            }
+            Err(why) => {
+                self.send_error("Could not start overwritten launcher".to_string());
+                return Err(format!("Could not start overwritten launcher: {why}"));
+            }
+        }
+    }
+
+    fn remove_aecoupdate_file(&self) -> Result<(), String> {
+        let path = self.get_self_aecoupdate_path()?;
+        if path.exists() {
+            // Try a few times, it is possible that the old process hasn't shut
+            // down yet
+            let retries = 5;
+            for retry in 1..=retries {
+                if let Err(why) = std::fs::remove_file(&path) {
+                    if retry == retries {
+                        self.send_error("Failed to remove temporary launcher.".to_string());
+                        return Err(format!("Failed to remove temporary launcher: {why}"));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                } else {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_self_aecoupdate_path(&self) -> Result<PathBuf, String> {
+        let current_name = self
+            .self_exe
+            .file_name()
+            .ok_or("Failed to get launcher file name".to_string())?
+            .to_str()
+            .ok_or("Failed to read launcher file name as a string".to_string())?;
+        let file_name = format!("{current_name}.{UPDATE_FILE_EXTENSION}");
+        Ok(self.self_exe.with_file_name(file_name))
     }
 }
 
