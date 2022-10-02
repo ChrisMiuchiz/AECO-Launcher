@@ -1,6 +1,7 @@
 mod worker;
 pub use worker::PatchWorker;
 
+mod check_patches;
 mod constants;
 mod download;
 mod error;

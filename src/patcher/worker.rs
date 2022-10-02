@@ -1,13 +1,15 @@
+use super::check_patches::check_platform_patches;
 use super::constants::*;
 use super::download;
 use super::error::{PatchError, PatchErrorLevel, ToPatchError};
+use super::utils::set_executable;
 use super::utils::{byte_string, get_platform};
 use crate::message::{GUIMessage, PatchMessage, PatchStatus};
 use aeco_patch_config::fsobject::*;
 use aeco_patch_config::status::ServerStatus;
 use std::error::Error;
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::mpsc::{Receiver, Sender},
 };
 
@@ -185,7 +187,7 @@ impl PatchWorker {
         for platform in ["all", &get_platform()] {
             // Compare local files against the patch data, and update files if needed
             if let Some(platform_dir) = subdir_by_name(&patch, platform) {
-                self.check_platform_patches(platform_dir).map_err(|why| {
+                check_platform_patches(self, platform_dir).map_err(|why| {
                     why.to_patch_error(&format!("Failed to check files for platform '{platform}'"))
                 })?;
             } else {
@@ -314,230 +316,6 @@ impl PatchWorker {
         Ok(())
     }
 
-    /// Checks files to be patched, patching them if necessary
-    fn check_platform_patches(&mut self, dir: &Directory) -> Result<(), Box<dyn Error>> {
-        let check_platform = &dir.name;
-
-        // The URL to start at needs to be patch/platform because that is where
-        // platform specific files are stored
-        let platform_net_path = self.patch_url.join(&format!("{check_platform}/"))?;
-
-        let total_files = get_total_files_in_patch(dir);
-        let disk_dir = self.self_dir.clone();
-        let checked_files = self.check_patches_dir(
-            dir,
-            disk_dir,
-            platform_net_path,
-            check_platform,
-            0,
-            total_files,
-        )?;
-
-        // All files should have been checked, but it is not fatal if these
-        // values do not match
-        if checked_files != total_files {
-            eprintln!(
-                "Checked files: {checked_files}; total files: {total_files}. These should match."
-            );
-        }
-
-        self.send_download(format!("{total_files} files checked."), 1.);
-
-        Ok(())
-    }
-
-    /// Iterates through a directory for files to be patched
-    fn check_patches_dir<P>(
-        &mut self,
-        dir: &Directory,
-        disk_dir: P,
-        net_path: reqwest::Url,
-        platform: &str,
-        completed_files: usize,
-        total_files: usize,
-    ) -> Result<usize, Box<dyn Error>>
-    where
-        P: AsRef<Path>,
-    {
-        let mut completed_files = completed_files;
-        for child in &dir.children {
-            completed_files = match child {
-                FSObject::File(file) => self.check_patches_file(
-                    file,
-                    disk_dir.as_ref().join(&file.name),
-                    net_path.join(&file.name)?,
-                    platform,
-                    completed_files,
-                    total_files,
-                )?,
-                FSObject::Directory(d) => self.check_patches_dir(
-                    d,
-                    disk_dir.as_ref().join(&d.name),
-                    net_path.join(&format!("{}/", &d.name))?, // Dir URLS need / to be parsed correctly
-                    platform,
-                    completed_files,
-                    total_files,
-                )?,
-                FSObject::Archive(a) => self.check_patches_archive(
-                    a,
-                    disk_dir.as_ref().join(&a.name).with_extension("hed"),
-                    disk_dir.as_ref().join(&a.name).with_extension("dat"),
-                    // Dir URLs need / to be parsed correctly, and archives are stored online as .archive
-                    net_path.join(&format!("{}.archive/", &a.name))?,
-                    platform,
-                    completed_files,
-                    total_files,
-                )?,
-            }
-        }
-
-        Ok(completed_files)
-    }
-
-    /// Checks whether a file should be patched, patching it if necessary
-    fn check_patches_file<P>(
-        &mut self,
-        file: &File,
-        disk_file: P,
-        net_file: reqwest::Url,
-        platform: &str,
-        mut completed_files: usize,
-        total_files: usize,
-    ) -> Result<usize, Box<dyn Error>>
-    where
-        P: AsRef<Path>,
-    {
-        let file_to_check = disk_file.as_ref();
-        let mut file_to_write = file_to_check.to_path_buf();
-
-        let progress = completed_files as f32 / total_files as f32;
-        self.send_download(
-            format!(
-                "Checking file {} / {} for platform \'{platform}\'",
-                completed_files + 1,
-                total_files
-            ),
-            progress,
-        );
-
-        if !file_to_write.exists() {
-            println!("Downloading new file {net_file} -> {:?}", &file_to_write);
-            let file_bytes = download::patch(self, net_file)?;
-            std::fs::write(file_to_write, file_bytes)?;
-        } else {
-            let file_matches = {
-                let disk_data = std::fs::read(&file_to_check)?;
-                let disk_file_data = File::new(&file.name, &disk_data);
-                file.digest == disk_file_data.digest
-            };
-
-            let is_self = file_to_check == self.self_exe;
-
-            // If the patched file is this program, don't try to overwrite it
-            // while it is running. Instead, save it as a different file name
-            // and move it later.
-            if is_self {
-                file_to_write = self.get_self_aecoupdate_path()?;
-            }
-
-            if !file_matches {
-                println!("Updating {net_file} -> {:?}", &file_to_write);
-                let file_bytes = download::patch(self, net_file)?;
-                std::fs::write(&file_to_write, file_bytes)?;
-                // If we got the file successfully, and it is a replacement for
-                // this program, save the path to the new one for later so we
-                // can switch to it.
-                if is_self {
-                    // Make sure the file is exectuable on unixlike systems
-                    set_executable(&file_to_write)?;
-                    self.updated_patcher = Some(file_to_write);
-                }
-            }
-        }
-
-        completed_files += 1;
-
-        Ok(completed_files)
-    }
-
-    /// Iterates through an archive checking for files to be patched, patching them if necessary
-    fn check_patches_archive<P1, P2>(
-        &self,
-        archive: &Archive,
-        hed_path: P1,
-        dat_path: P2,
-        net_path: reqwest::Url,
-        platform: &str,
-        completed_files: usize,
-        total_files: usize,
-    ) -> Result<usize, Box<dyn Error>>
-    where
-        P1: AsRef<Path>,
-        P2: AsRef<Path>,
-    {
-        let mut disk_archive =
-            aeco_archive::Archive::open_pair(dat_path.as_ref(), hed_path.as_ref())
-                .map_err(|_| format!("Couldn't open archive {}", &archive.name))?;
-        let mut changes_made = false;
-
-        let mut completed_files = completed_files;
-
-        for file in &archive.files {
-            let progress = completed_files as f32 / total_files as f32;
-            self.send_download(
-                format!(
-                    "Checking file {} / {} for platform \'{platform}\'",
-                    completed_files + 1,
-                    total_files
-                ),
-                progress,
-            );
-            let file_matches = match disk_archive.get_file(&file.name) {
-                Ok(archive_data) => {
-                    // File is present
-                    let archive_file = File::new(&file.name, &archive_data);
-                    file.digest == archive_file.digest
-                }
-                Err(aeco_archive::ArchiveError::FileNotPresentError) => {
-                    // The file is not present
-                    false
-                }
-                Err(_) => {
-                    // Some other error happened
-                    // TODO: ArchiveError should impl Error
-                    return Err(format!("Failed while reading {}", archive.name).into());
-                }
-            };
-
-            if !file_matches {
-                let new_file_url = net_path.join(&file.name)?;
-                println!(
-                    "Downloading {new_file_url} -> {:?} / {:?}",
-                    dat_path.as_ref(),
-                    hed_path.as_ref()
-                );
-                let new_file_bytes = download::patch(self, new_file_url)?;
-                disk_archive
-                    .add_file(&file.name, &new_file_bytes)
-                    .map_err(|_| format!("Couldn't write to archive {}", &archive.name))?;
-                changes_made = true;
-            }
-
-            completed_files += 1;
-        }
-
-        if changes_made {
-            disk_archive
-                .finalize()
-                .map_err(|_| format!("Couldn't finalize archive {}", &archive.name))?;
-            disk_archive
-                .defrag()
-                .map_err(|_| format!("Couldn't defrag archive {}", &archive.name))?;
-        }
-
-        Ok(completed_files)
-    }
-
     fn start_game(&self) -> Result<(), Box<dyn Error>> {
         self.send_download("Let's play the game!".to_string(), 1.);
 
@@ -622,7 +400,7 @@ impl PatchWorker {
         Ok(())
     }
 
-    fn get_self_aecoupdate_path(&self) -> Result<PathBuf, Box<dyn Error>> {
+    pub fn get_self_aecoupdate_path(&self) -> Result<PathBuf, Box<dyn Error>> {
         let current_name = self
             .self_exe
             .file_name()
@@ -644,30 +422,4 @@ fn subdir_by_name<'a>(dir: &'a Directory, name: &str) -> Option<&'a Directory> {
         }
     }
     None
-}
-
-fn get_total_files_in_patch(dir: &Directory) -> usize {
-    let mut total_files = 0;
-
-    for child in &dir.children {
-        total_files += match child {
-            FSObject::File(_) => 1,
-            FSObject::Directory(d) => get_total_files_in_patch(d),
-            FSObject::Archive(a) => a.files.len(),
-        };
-    }
-
-    total_files
-}
-
-fn set_executable<P>(path: P) -> std::io::Result<()>
-where
-    P: AsRef<Path>,
-{
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o764))?;
-    }
-    Ok(())
 }
