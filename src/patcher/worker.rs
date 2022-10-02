@@ -472,8 +472,9 @@ impl PatchWorker {
                 // If we got the file successfully, and it is a replacement for
                 // this program, save the path to the new one for later so we
                 // can switch to it.
-                // TODO: make sure the file is executable on unix
                 if is_self {
+                    // Make sure the file is exectuable on unixlike systems
+                    set_executable(&file_to_write).map_err(|why| why.to_string())?;
                     self.updated_patcher = Some(file_to_write);
                 }
             }
@@ -609,6 +610,9 @@ impl PatchWorker {
             }
         }
 
+        // Make sure the file is executable on unixlike systems
+        set_executable(&new_file_path).map_err(|why| why.to_string())?;
+
         // Open the restored launcher and close this one
         match subprocess::Popen::create(&[new_file_path], subprocess::PopenConfig::default()) {
             Ok(mut popen) => {
@@ -681,4 +685,16 @@ fn get_total_files_in_patch(dir: &Directory) -> usize {
     }
 
     total_files
+}
+
+fn set_executable<P>(path: P) -> std::io::Result<()>
+where
+    P: AsRef<Path>,
+{
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o764))?;
+    }
+    Ok(())
 }
