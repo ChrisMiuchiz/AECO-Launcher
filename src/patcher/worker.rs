@@ -174,7 +174,7 @@ impl PatchWorker {
         for platform in ["all", &get_platform()] {
             // Compare local files against the patch data, and update files if needed
             if let Some(platform_dir) = subdir_by_name(&patch, platform) {
-                self.check_platform_patches(&platform_dir)?;
+                self.check_platform_patches(platform_dir)?;
             } else {
                 println!("No patch directory found for platform \'{platform}\'");
             }
@@ -705,10 +705,7 @@ impl PatchWorker {
 
     /// Downloads a file and returns the resulting bytes
     fn download_patched_file(&self, net_file: reqwest::Url) -> Result<Vec<u8>, String> {
-        let response = match self
-            .runtime
-            .block_on(self.client.get(net_file.clone()).send())
-        {
+        let response = match self.runtime.block_on(self.client.get(net_file).send()) {
             Ok(x) => x,
             Err(why) => {
                 self.send_error("Failed to get patched file".to_string());
@@ -786,11 +783,11 @@ impl PatchWorker {
             Ok(mut popen) => {
                 // End current patcher
                 popen.detach();
-                std::process::exit(0);
+                std::process::exit(0)
             }
             Err(why) => {
                 self.send_error("Could not start overwritten launcher".to_string());
-                return Err(format!("Could not start overwritten launcher: {why}"));
+                Err(format!("Could not start overwritten launcher: {why}"))
             }
         }
     }
@@ -821,9 +818,9 @@ impl PatchWorker {
         let current_name = self
             .self_exe
             .file_name()
-            .ok_or("Failed to get launcher file name".to_string())?
+            .ok_or_else(|| "Failed to get launcher file name".to_string())?
             .to_str()
-            .ok_or("Failed to read launcher file name as a string".to_string())?;
+            .ok_or_else(|| "Failed to read launcher file name as a string".to_string())?;
         let file_name = format!("{current_name}.{UPDATE_FILE_EXTENSION}");
         Ok(self.self_exe.with_file_name(file_name))
     }
