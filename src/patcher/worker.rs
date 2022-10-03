@@ -8,10 +8,12 @@ use crate::message::{GUIMessage, PatchMessage, PatchStatus};
 use aeco_patch_config::fsobject::*;
 use aeco_patch_config::status::ServerStatus;
 use std::error::Error;
+use std::ffi::OsStr;
 use std::{
     path::PathBuf,
     sync::mpsc::{Receiver, Sender},
 };
+use subprocess::PopenError;
 
 const UPDATE_FILE_EXTENSION: &str = "aecoupdate";
 
@@ -145,6 +147,7 @@ impl PatchWorker {
                         Err(why) => {
                             // Could not launch the game, need to stay open to inform user
                             self.send_status(PatchStatus::Error);
+                            self.send_error("Failed to launch the game".to_string());
                             eprintln!("Failed to launch game: {why}");
                         }
                     }
@@ -199,16 +202,8 @@ impl PatchWorker {
 
         // Open the new patcher if there is one
         if let Some(p) = &self.updated_patcher {
-            match subprocess::Popen::create(&[p], subprocess::PopenConfig::default()) {
-                Ok(mut popen) => {
-                    // End current patcher
-                    popen.detach();
-                    std::process::exit(0);
-                }
-                Err(why) => {
-                    return Err(why.to_patch_error("Could not start updated launcher"));
-                }
-            }
+            let error = start_process_and_close(&[p]);
+            return Err(error.to_patch_error("Could not start updated launcher"));
         }
 
         Ok(())
@@ -317,9 +312,26 @@ impl PatchWorker {
     }
 
     fn start_game(&self) -> Result<(), Box<dyn Error>> {
-        self.send_download("Let's play the game!".to_string(), 1.);
+        let game_full_path = self.self_dir.join(GAME_EXE);
+        let eco = OsStr::new(&game_full_path);
+        let launch = OsStr::new("/launch");
+        let wine = OsStr::new("wine");
+        let args = {
+            #[cfg(unix)]
+            {
+                // TODO: On Unixlike systems, perhaps a new wineprefix should be created
+                // TODO: On Unixlike systems, help the user install Wine
+                [wine, eco, launch].to_vec()
+            }
+            #[cfg(windows)]
+            {
+                [eco, launch].to_vec()
+            }
+        };
 
-        Ok(())
+        std::env::set_current_dir(&self.self_dir)?;
+        let error = start_process_and_close(&args);
+        return Err(error.into());
     }
 
     fn check_patcher_aecoupdate(&self) -> Result<(), PatchError> {
@@ -369,14 +381,8 @@ impl PatchWorker {
             .map_err(|why| why.to_patch_error("Failed to make patcher executable"))?;
 
         // Open the restored launcher and close this one
-        match subprocess::Popen::create(&[new_file_path], subprocess::PopenConfig::default()) {
-            Ok(mut popen) => {
-                // End current patcher
-                popen.detach();
-                std::process::exit(0)
-            }
-            Err(why) => Err(why.to_patch_error("Failed to start new launcher")),
-        }
+        let error = start_process_and_close(&[new_file_path]);
+        Err(error.to_patch_error("Failed to start new launcher"))
     }
 
     fn remove_aecoupdate_file(&self) -> Result<(), Box<dyn Error>> {
@@ -422,4 +428,17 @@ fn subdir_by_name<'a>(dir: &'a Directory, name: &str) -> Option<&'a Directory> {
         }
     }
     None
+}
+
+/// Starts a new process and closes the current one. Any case in which this
+/// returns indicates an error.
+fn start_process_and_close(args: &[impl AsRef<OsStr>]) -> PopenError {
+    match subprocess::Popen::create(args, subprocess::PopenConfig::default()) {
+        Ok(mut popen) => {
+            // Close this program
+            popen.detach();
+            std::process::exit(0)
+        }
+        Err(why) => why,
+    }
 }
