@@ -23,46 +23,16 @@ pub trait ToPatchError {
     fn to_patch_error_level(self, friendly_message: &str, level: PatchErrorLevel) -> PatchError;
 }
 
-impl ToPatchError for Box<dyn Error> {
+impl<T> ToPatchError for T where T: Into<Box<dyn Error>> {
     fn to_patch_error(self, friendly_message: &str) -> PatchError {
         self.to_patch_error_level(friendly_message, PatchErrorLevel::High)
     }
 
     fn to_patch_error_level(self, friendly_message: &str, level: PatchErrorLevel) -> PatchError {
         PatchError {
-            internal_error: self,
+            internal_error: self.into(),
             friendly_message: friendly_message.to_owned(),
             level,
         }
-    }
-}
-
-impl ToPatchError for serde_json::Error {
-    fn to_patch_error(self, friendly_message: &str) -> PatchError {
-        (Box::from(self) as Box<dyn Error>).to_patch_error(friendly_message)
-    }
-
-    fn to_patch_error_level(self, friendly_message: &str, level: PatchErrorLevel) -> PatchError {
-        (Box::from(self) as Box<dyn Error>).to_patch_error_level(friendly_message, level)
-    }
-}
-
-impl ToPatchError for subprocess::PopenError {
-    fn to_patch_error(self, friendly_message: &str) -> PatchError {
-        (Box::from(self) as Box<dyn Error>).to_patch_error(friendly_message)
-    }
-
-    fn to_patch_error_level(self, friendly_message: &str, level: PatchErrorLevel) -> PatchError {
-        (Box::from(self) as Box<dyn Error>).to_patch_error_level(friendly_message, level)
-    }
-}
-
-impl ToPatchError for std::io::Error {
-    fn to_patch_error(self, friendly_message: &str) -> PatchError {
-        (Box::from(self) as Box<dyn Error>).to_patch_error(friendly_message)
-    }
-
-    fn to_patch_error_level(self, friendly_message: &str, level: PatchErrorLevel) -> PatchError {
-        (Box::from(self) as Box<dyn Error>).to_patch_error_level(friendly_message, level)
     }
 }
