@@ -154,7 +154,7 @@ impl PatcherUI {
                         PatchStatus::Error => {
                             self.play_button_state = PlayButtonState::Retry;
                         }
-                        PatchStatus::GameLaunched => {
+                        PatchStatus::Close => {
                             // We are done!
                             frame.close();
                         }
@@ -401,5 +401,11 @@ impl eframe::App for PatcherUI {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         ctx.request_repaint();
         self.window(ctx, frame);
+    }
+}
+
+impl Drop for PatcherUI {
+    fn drop(&mut self) {
+        self.send(GUIMessage::Close);
     }
 }
