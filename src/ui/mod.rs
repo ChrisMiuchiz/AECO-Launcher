@@ -1,4 +1,5 @@
 use crate::message::{GUIMessage, PatchMessage, PatchStatus};
+use crate::version::version_summary;
 use eframe::{egui, emath::Vec2};
 use std::sync::mpsc::{Receiver, Sender};
 mod atomix;
@@ -73,6 +74,7 @@ pub struct PatcherUI {
     password: String,
     progress_bar_state: ProgressBarState,
     play_button_state: PlayButtonState,
+    program_version: String,
 }
 
 impl PatcherUI {
@@ -88,6 +90,7 @@ impl PatcherUI {
                 "Waiting for patch server...".to_string(),
             ),
             play_button_state: PlayButtonState::Disabled,
+            program_version: version_summary(),
         }
     }
 
@@ -269,26 +272,45 @@ impl PatcherUI {
             .frame(egui::Frame::none().inner_margin(15.))
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.style_mut().text_styles = [(
-                        egui::TextStyle::Button,
-                        egui::FontId::new(32.0, egui::FontFamily::Proportional),
-                    )]
+                    ui.style_mut().text_styles = [
+                        // URL buttons
+                        (
+                            egui::TextStyle::Button,
+                            egui::FontId::new(32.0, egui::FontFamily::Proportional),
+                        ),
+                        // Version label
+                        (
+                            egui::TextStyle::Body,
+                            egui::FontId::new(16.0, egui::FontFamily::Proportional),
+                        ),
+                    ]
                     .into();
+
                     ui.style_mut().visuals.widgets.noninteractive.bg_stroke =
                         egui::Stroke::new(1., egui::Color32::GRAY);
+
+                    // Control panel link
                     if ui
                         .add(egui::Button::new("Control Panel").fill(egui::Color32::TRANSPARENT))
                         .clicked()
                     {
                         open::that("https://ecocp.atomixro.com").ok();
                     }
+
                     ui.separator();
+
+                    // Registration link
                     if ui
                         .add(egui::Button::new("Register").fill(egui::Color32::TRANSPARENT))
                         .clicked()
                     {
                         open::that("https://ecocp.atomixro.com/register").ok();
                     }
+
+                    // Version string
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
+                        ui.label(&self.program_version);
+                    });
                 });
             });
     }

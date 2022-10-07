@@ -2,6 +2,10 @@
 name = "aeco-launcher"
 version = "0.1.0"
 edition = "2021"
+build = "src/build.rs"
+
+[build-dependencies]
+subprocess = "0.2.9"
 
 [dependencies]
 aeco-patch-config = { git = "https://github.com/ChrisMiuchiz/AECO-Patch-Config.git" }
