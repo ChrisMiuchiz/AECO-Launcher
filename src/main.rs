@@ -4,6 +4,7 @@
 mod message;
 mod patcher;
 mod ui;
+mod version;
 use message::{GUIMessage, PatchMessage};
 use std::sync::mpsc::channel;
 
