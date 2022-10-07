@@ -9,10 +9,11 @@ pub enum PatchStatus {
     Finished,
     Working,
     Error,
-    GameLaunched,
+    Close,
 }
 
 pub enum GUIMessage {
     Retry,
     Play,
+    Close,
 }

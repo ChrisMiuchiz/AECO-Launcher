@@ -17,6 +17,13 @@ use subprocess::PopenError;
 
 const UPDATE_FILE_EXTENSION: &str = "aecoupdate";
 
+/// This is used for functions which need to communicate whether the program
+/// should continue running or shut down after executing.
+pub enum RunState {
+    Continue,
+    Close,
+}
+
 pub struct PatchWorker {
     tx: Sender<PatchMessage>,
     rx: Receiver<GUIMessage>,
@@ -111,8 +118,11 @@ impl PatchWorker {
         while self.rx.try_recv().is_ok() {}
     }
 
-    pub fn run(&mut self) {
+    pub fn run(mut self) {
+        // Main loop includes all message handling and patching operations
         self.main_loop();
+        // Since this takes ownership, once this ends, drop() will be called
+        // and will communicate to the GUI that it should close
     }
 
     fn main_loop(&mut self) {
@@ -122,18 +132,26 @@ impl PatchWorker {
             match message {
                 GUIMessage::Retry => {
                     self.send_status(PatchStatus::Working);
-                    if let Err(why) = self.patch_routine() {
-                        // Communicate error status to the GUI
-                        self.send_status(PatchStatus::Error);
+                    match self.patch_routine() {
+                        Ok(RunState::Continue) => {}
 
-                        // Display error message
-                        match why.level {
-                            PatchErrorLevel::Low => self.send_info(why.friendly_message),
-                            PatchErrorLevel::High => self.send_error(why.friendly_message),
+                        // End if a state was encountered that requires the
+                        // program to close
+                        Ok(RunState::Close) => return,
+
+                        Err(why) => {
+                            // Communicate error status to the GUI
+                            self.send_status(PatchStatus::Error);
+
+                            // Display error message
+                            match why.level {
+                                PatchErrorLevel::Low => self.send_info(why.friendly_message),
+                                PatchErrorLevel::High => self.send_error(why.friendly_message),
+                            }
+
+                            // Log more detailed error info to the terminal
+                            eprintln!("{:?}", why.internal_error);
                         }
-
-                        // Log more detailed error info to the terminal
-                        eprintln!("{:?}", why.internal_error);
                     }
                 }
                 GUIMessage::Play => {
@@ -141,7 +159,6 @@ impl PatchWorker {
                         Ok(_) => {
                             // The game is running and we can exit
                             std::thread::sleep(std::time::Duration::from_secs(3));
-                            self.send_status(PatchStatus::GameLaunched);
                             return;
                         }
                         Err(why) => {
@@ -152,6 +169,8 @@ impl PatchWorker {
                         }
                     }
                 }
+                // Close if the GUI closes
+                GUIMessage::Close => return,
             }
 
             message = match self.recv() {
@@ -164,8 +183,10 @@ impl PatchWorker {
         }
     }
 
-    fn patch_routine(&mut self) -> Result<(), PatchError> {
-        self.check_patcher_aecoupdate()?;
+    fn patch_routine(&mut self) -> Result<RunState, PatchError> {
+        if let RunState::Close = self.check_patcher_aecoupdate()? {
+            return Ok(RunState::Close);
+        }
 
         self.send_info("Checking server status".to_string());
         let server_status = download::server_status(self)?;
@@ -202,11 +223,14 @@ impl PatchWorker {
 
         // Open the new patcher if there is one
         if let Some(p) = &self.updated_patcher {
-            let error = start_process_and_close(&[p]);
-            return Err(error.to_patch_error("Could not start updated launcher"));
+            match start_detached_process(&[p]) {
+                // Close the patcher if the new patcher opened successfully
+                Ok(_) => return Ok(RunState::Close),
+                Err(why) => return Err(why.to_patch_error("Could not start updated launcher")),
+            }
         }
 
-        Ok(())
+        Ok(RunState::Continue)
     }
 
     /// Checks whether the game is in the same directory as this program
@@ -330,11 +354,10 @@ impl PatchWorker {
         };
 
         std::env::set_current_dir(&self.self_dir)?;
-        let error = start_process_and_close(&args);
-        Err(error.into())
+        Ok(start_detached_process(&args)?)
     }
 
-    fn check_patcher_aecoupdate(&self) -> Result<(), PatchError> {
+    fn check_patcher_aecoupdate(&self) -> Result<RunState, PatchError> {
         // Get current extension, or finish if there is none
         let extension = match self.self_exe.extension() {
             Some(ext) => ext,
@@ -342,13 +365,13 @@ impl PatchWorker {
                 // Remove aecoupdate launcher if there is one
                 self.remove_aecoupdate_file()
                     .map_err(|why| why.to_patch_error("Failed to remove temporary launcher"))?;
-                return Ok(());
+                return Ok(RunState::Continue);
             }
         };
 
         // Finish if the current extension isn't the update extension
         if extension != UPDATE_FILE_EXTENSION {
-            return Ok(());
+            return Ok(RunState::Continue);
         }
 
         // Remove the extension
@@ -381,8 +404,11 @@ impl PatchWorker {
             .map_err(|why| why.to_patch_error("Failed to make patcher executable"))?;
 
         // Open the restored launcher and close this one
-        let error = start_process_and_close(&[new_file_path]);
-        Err(error.to_patch_error("Failed to start new launcher"))
+        start_detached_process(&[new_file_path])
+            .map_err(|why| why.to_patch_error("Failed to start new launcher"))?;
+
+        // Signal to stop the patcher
+        Ok(RunState::Close)
     }
 
     fn remove_aecoupdate_file(&self) -> Result<(), Box<dyn Error>> {
@@ -418,6 +444,12 @@ impl PatchWorker {
     }
 }
 
+impl Drop for PatchWorker {
+    fn drop(&mut self) {
+        self.send_status(PatchStatus::Close);
+    }
+}
+
 /// Gets a Directory child from a Directory by name, if it is present
 fn subdir_by_name<'a>(dir: &'a Directory, name: &str) -> Option<&'a Directory> {
     for child in &dir.children {
@@ -430,15 +462,14 @@ fn subdir_by_name<'a>(dir: &'a Directory, name: &str) -> Option<&'a Directory> {
     None
 }
 
-/// Starts a new process and closes the current one. Any case in which this
-/// returns indicates an error.
-fn start_process_and_close(args: &[impl AsRef<OsStr>]) -> PopenError {
+/// Starts a new process and closes the current one.
+fn start_detached_process(args: &[impl AsRef<OsStr>]) -> Result<(), PopenError> {
     match subprocess::Popen::create(args, subprocess::PopenConfig::default()) {
         Ok(mut popen) => {
             // Close this program
             popen.detach();
-            std::process::exit(0)
+            Ok(())
         }
-        Err(why) => why,
+        Err(why) => Err(why),
     }
 }
