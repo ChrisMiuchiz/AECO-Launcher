@@ -75,10 +75,15 @@ pub struct PatcherUI {
     progress_bar_state: ProgressBarState,
     play_button_state: PlayButtonState,
     program_version: String,
+    use_login: bool,
 }
 
 impl PatcherUI {
-    pub fn new(sender: Sender<GUIMessage>, receiver: Receiver<PatchMessage>) -> PatcherUI {
+    pub fn new(
+        sender: Sender<GUIMessage>,
+        receiver: Receiver<PatchMessage>,
+        use_login: bool,
+    ) -> PatcherUI {
         PatcherUI {
             tx: sender,
             rx: receiver,
@@ -91,10 +96,11 @@ impl PatcherUI {
             ),
             play_button_state: PlayButtonState::Disabled,
             program_version: version_summary(),
+            use_login,
         }
     }
 
-    pub fn run(sender: Sender<GUIMessage>, receiver: Receiver<PatchMessage>) {
+    pub fn run(sender: Sender<GUIMessage>, receiver: Receiver<PatchMessage>, use_login: bool) {
         let window_size = Some(Vec2 {
             x: 1000.0,
             y: 600.0,
@@ -112,7 +118,7 @@ impl PatcherUI {
                 transparent: true,
                 ..eframe::NativeOptions::default()
             },
-            Box::new(|_cc| Box::new(PatcherUI::new(sender, receiver))),
+            Box::new(move |_cc| Box::new(PatcherUI::new(sender, receiver, use_login))),
         );
     }
 
@@ -203,7 +209,9 @@ impl PatcherUI {
 
     fn central_panel(&mut self, ui: &mut egui::Ui) {
         self.bottom_panel(ui);
-        self.login_panel(ui);
+        if self.use_login {
+            self.login_panel(ui);
+        }
     }
 
     fn login_panel(&mut self, ui: &mut egui::Ui) {

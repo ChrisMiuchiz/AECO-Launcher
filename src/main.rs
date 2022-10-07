@@ -32,5 +32,5 @@ fn main() {
     }
 
     std::thread::spawn(move || patchworker.run());
-    ui::PatcherUI::run(gui_tx, patch_rx);
+    ui::PatcherUI::run(gui_tx, patch_rx, false);
 }
