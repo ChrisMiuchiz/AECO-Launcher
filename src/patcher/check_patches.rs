@@ -62,6 +62,11 @@ fn check_dir<P>(
 where
     P: AsRef<Path>,
 {
+    // Create the directory if it does not exist yet
+    if !disk_dir.as_ref().exists() {
+        std::fs::create_dir(&disk_dir)?;
+    }
+
     for child in &dir.children {
         completed_files = match child {
             FSObject::File(file) => {
