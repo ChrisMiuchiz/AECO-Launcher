@@ -23,7 +23,10 @@ pub trait ToPatchError {
     fn to_patch_error_level(self, friendly_message: &str, level: PatchErrorLevel) -> PatchError;
 }
 
-impl<T> ToPatchError for T where T: Into<Box<dyn Error>> {
+impl<T> ToPatchError for T
+where
+    T: Into<Box<dyn Error>>,
+{
     fn to_patch_error(self, friendly_message: &str) -> PatchError {
         self.to_patch_error_level(friendly_message, PatchErrorLevel::High)
     }
