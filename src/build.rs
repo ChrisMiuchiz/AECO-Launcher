@@ -22,7 +22,7 @@ fn git_hash() {
 }
 
 /// Optionally emits GIT_CHANGES as 0 or 1 depending on whether
-/// `git diff --cached --name-status` contains anything.
+/// there are uncommitted changes or diffs
 fn git_changes() {
     let output = match Command::new("git")
         .args(&["diff", "--cached", "--name-status"])
@@ -32,11 +32,25 @@ fn git_changes() {
         Err(_) => return,
     };
 
+    let git_uncommitted = match String::from_utf8(output.stdout) {
+        Ok(x) => x,
+        Err(_) => return,
+    };
+
+    let output = match Command::new("git").args(&["diff"]).output() {
+        Ok(x) => x,
+        Err(_) => return,
+    };
+
     let git_diff = match String::from_utf8(output.stdout) {
         Ok(x) => x,
         Err(_) => return,
     };
 
-    let git_changes: u8 = if git_diff.trim().is_empty() { 0 } else { 1 };
+    let git_changes: u8 = if git_uncommitted.trim().is_empty() && git_diff.trim().is_empty() {
+        0
+    } else {
+        1
+    };
     println!("cargo:rustc-env=GIT_CHANGES={}", git_changes);
 }
