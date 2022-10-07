@@ -187,8 +187,7 @@ fn check_archive(
     total_files: usize,
 ) -> Result<usize, Box<dyn Error>> {
     // Open the ECO archive
-    let mut disk_archive = aeco_archive::Archive::open_pair(archive_paths.dat, archive_paths.hed)
-        .map_err(|_| format!("Couldn't open archive {}", &archive.name))?;
+    let mut disk_archive = aeco_archive::Archive::open_pair(archive_paths.dat, archive_paths.hed)?;
 
     // Keep track of if changes were made to this archive.
     // If changes were made, we will need to finalize (and defrag!) the archive
@@ -203,10 +202,7 @@ fn check_archive(
         // Figure out if the file in the archive matches the one stored on the
         // server. If a file is not present in the archive at all, that is
         // considered to not match.
-        let file_matches = file_matches_in_archive(&disk_archive, file).map_err(|_| {
-            // TODO: ArchiveError should impl Error
-            format!("Failed while reading {}", archive.name)
-        })?;
+        let file_matches = file_matches_in_archive(&disk_archive, file)?;
 
         // If the file in the archive is outdated, download it and insert it
         // into the archive on disk.
@@ -214,9 +210,7 @@ fn check_archive(
             let new_file_url = net_path.join(&file.name)?;
             println!("Downloading {new_file_url} -> {archive_paths:?}");
             let new_file_bytes = download::patch(worker, new_file_url)?;
-            disk_archive
-                .add_file(&file.name, &new_file_bytes)
-                .map_err(|_| format!("Couldn't write to archive {}", &archive.name))?;
+            disk_archive.add_file(&file.name, &new_file_bytes)?;
             changes_made = true;
         }
 
@@ -226,12 +220,8 @@ fn check_archive(
     // If the archive on disk has been altered, make sure changes get saved,
     // and make sure that any wasted space gets elimintated.
     if changes_made {
-        disk_archive
-            .finalize()
-            .map_err(|_| format!("Couldn't finalize archive {}", &archive.name))?;
-        disk_archive
-            .defrag()
-            .map_err(|_| format!("Couldn't defrag archive {}", &archive.name))?;
+        disk_archive.finalize()?;
+        disk_archive.defrag()?;
     }
 
     Ok(completed_files)
