@@ -331,7 +331,7 @@ impl PatchWorker {
 
         std::env::set_current_dir(&self.self_dir)?;
         let error = start_process_and_close(&args);
-        return Err(error.into());
+        Err(error.into())
     }
 
     fn check_patcher_aecoupdate(&self) -> Result<(), PatchError> {
