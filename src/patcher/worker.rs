@@ -357,7 +357,13 @@ impl PatchWorker {
         Ok(start_detached_process(&args)?)
     }
 
-    fn check_patcher_aecoupdate(&self) -> Result<RunState, PatchError> {
+    /// Checks for whether the current patcher is a temporary updated patcher.
+    ///
+    /// If so, the current patcher will be copied to the original patcher
+    /// location. `Ok(RunState::Close)` will be returned.
+    ///
+    /// If not, `Ok(RunState::Continue)` will be returned.
+    pub fn check_patcher_aecoupdate(&self) -> Result<RunState, PatchError> {
         // Get current extension, or finish if there is none
         let extension = match self.self_exe.extension() {
             Some(ext) => ext,

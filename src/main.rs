@@ -19,6 +19,17 @@ fn main() {
         }
     };
 
+    // Check for whether the patcher is a temporary updated one before creating
+    // a GUI.
+    // If an error occurs here, run the GUI anyway. The patchworker will do this
+    // operation again, and if it fails again, it will be able to display an
+    // error message to the user.
+    match patchworker.check_patcher_aecoupdate() {
+        Ok(patcher::RunState::Close) => return,
+        Ok(patcher::RunState::Continue) => {}
+        Err(why) => eprintln!("{:?}", why.internal_error),
+    }
+
     std::thread::spawn(move || patchworker.run());
     ui::PatcherUI::run(gui_tx, patch_rx);
 }
