@@ -36,10 +36,7 @@ pub fn short_hash() -> Option<&'static str> {
         None => return None,
     };
 
-    let start_index = 0;
-    let end_index = 7.min(long_hash.len());
-
-    Some(&long_hash[start_index..end_index])
+    long_hash.get(0..7)
 }
 
 /// Produces a summary of the crate version as a string
