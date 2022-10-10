@@ -6,3 +6,4 @@ pub const PATCHLIST: &str = "patchlist.json";
 pub const STATUS: &str = "status.json";
 pub const PATCH_DIR: &str = "patch/";
 pub const GAME_EXE: &str = "eco.exe";
+pub const GAME_INI: &str = "eco.ini";

@@ -230,6 +230,9 @@ impl PatchWorker {
             }
         }
 
+        self.check_eco_ini()
+            .map_err(|why| why.to_patch_error("Failed while checking eco.ini"))?;
+
         Ok(RunState::Continue)
     }
 
@@ -447,6 +450,38 @@ impl PatchWorker {
             .ok_or_else(|| "Failed to read launcher file name as a string".to_string())?;
         let file_name = format!("{current_name}.{UPDATE_FILE_EXTENSION}");
         Ok(self.self_exe.with_file_name(file_name))
+    }
+
+    /// Emil Chronicle Online expects a section in its eco.ini which is like:
+    ///
+    /// [CheckECO]
+    /// OK
+    ///
+    /// If this is not present, the game will ignore its eco.ini and load only
+    /// default configurations. The game is expected to write this before it
+    /// shuts down, but especially on Linux with Wine, this doesn't seem
+    /// to happen. If we perform this operation, then we can ensure that
+    /// Linux users' configurations actually work.
+    ///
+    /// When default configurations are loaded, undesirable things happen such
+    /// as not saving game-window size, using the incorrect in-game window
+    /// themes, and having the game be totally silent due to the volume sliders
+    /// being set to 0%.
+    fn check_eco_ini(&self) -> Result<(), Box<dyn Error>> {
+        let ini_file = self.self_dir.join(GAME_INI);
+        let ini_data = std::fs::read(&ini_file)?;
+
+        // While the game normally attempts to save this file as UTF_16, using
+        // UTF_8 here works. If we use UTF_16 here, then the case where the
+        // file was actually UTF_8 does not decode properly.
+        let (cow, _encoding, had_errors) = encoding_rs::UTF_8.decode(&ini_data);
+
+        if !had_errors && cow.find("[CheckECO]").is_none() {
+            let new_string = format!("{cow}\r\n[CheckECO]\r\nOK\r\n");
+            std::fs::write(ini_file, new_string)?;
+        }
+
+        Ok(())
     }
 }
 
