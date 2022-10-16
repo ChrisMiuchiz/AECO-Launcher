@@ -7,4 +7,4 @@
 pre-build = ["apt-get update && apt-get install -y libfontconfig1-dev libclang-8-dev"]
 
 [target.i686-unknown-linux-gnu]
-pre-build = ["apt-get update && apt-get install -y libfontconfig1-dev libclang-dev"]
+pre-build = ["apt-get update && apt-get install -y libfontconfig1-dev libclang-8-dev"]
