@@ -1,0 +1,7 @@
+Package: atomix-eco-saga10
+Version: 1.0
+Architecture: amd64
+Package-Type: deb
+Maintainer: Atomix ECO
+Pre-Depends: wine, libc6
+Description: Launcher for Atomix Emil Chronicle Online
