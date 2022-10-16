@@ -30,6 +30,9 @@ rm -r ./packages/x86_64-unknown-linux-gnu/standalone/Atomix-ECO
 
 # Create deb
 cp -r ./deb ./packages/x86_64-unknown-linux-gnu/
+mkdir -p ./packages/x86_64-unknown-linux-gnu/deb/atomix-eco-saga10_amd64/usr/local/bin/
+cp ./packages/x86_64-unknown-linux-gnu/wrapper/atomix-eco-saga10 ./packages/x86_64-unknown-linux-gnu/deb/atomix-eco-saga10_amd64/usr/local/bin/
+chmod 775 ./packages/x86_64-unknown-linux-gnu/deb/atomix-eco-saga10_amd64/usr/local/bin/atomix-eco-saga10
 mkdir -p ./packages/x86_64-unknown-linux-gnu/deb/atomix-eco-saga10_amd64/usr/share/icons/hicolor/128x128/apps/
 cp ./assets/atomix-eco-saga10.png ./packages/x86_64-unknown-linux-gnu/deb/atomix-eco-saga10_amd64/usr/share/icons/hicolor/128x128/apps/
 cd ./packages/x86_64-unknown-linux-gnu/deb/
