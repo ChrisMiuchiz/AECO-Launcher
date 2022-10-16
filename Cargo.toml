@@ -24,6 +24,9 @@ open = "3.0.3"
 subprocess = "0.2.9"
 encoding_rs = "0.8.31"
 
+[features]
+dont_update_self = []
+
 [profile.release]
 strip = true
 lto = true

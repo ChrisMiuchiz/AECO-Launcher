@@ -141,37 +141,48 @@ where
 
     send_checked_files_update(worker, completed_files + 1, total_files, platform);
 
-    if !file_to_write.exists() {
-        println!("Downloading new file {net_file} -> {:?}", &file_to_write);
-        let file_bytes = download::patch(worker, net_file)?;
-        std::fs::write(file_to_write, file_bytes)?;
-    } else {
-        let file_matches = {
-            let disk_data = std::fs::read(&file_to_check)?;
-            let disk_file_data = File::new(&file.name, &disk_data);
-            file.digest == disk_file_data.digest
-        };
+    let is_self = file_to_check == worker.self_exe;
 
-        let is_self = file_to_check == worker.self_exe;
+    // The program can be built to avoid downloading updates to itself using
+    // the "dont_update_self" feature.
 
-        // If the patched file is this program, don't try to overwrite it
-        // while it is running. Instead, save it as a different file name
-        // and move it later.
-        if is_self {
-            file_to_write = worker.get_self_aecoupdate_path()?;
-        }
+    #[cfg(feature = "dont_update_self")]
+    let skip_file = if is_self { true } else { false };
 
-        if !file_matches {
-            println!("Updating {net_file} -> {:?}", &file_to_write);
+    #[cfg(not(feature = "dont_update_self"))]
+    let skip_file = false;
+
+    if !skip_file {
+        if !file_to_write.exists() {
+            println!("Downloading new file {net_file} -> {:?}", &file_to_write);
             let file_bytes = download::patch(worker, net_file)?;
-            std::fs::write(&file_to_write, file_bytes)?;
-            // If we got the file successfully, and it is a replacement for
-            // this program, save the path to the new one for later so we
-            // can switch to it.
+            std::fs::write(file_to_write, file_bytes)?;
+        } else {
+            let file_matches = {
+                let disk_data = std::fs::read(&file_to_check)?;
+                let disk_file_data = File::new(&file.name, &disk_data);
+                file.digest == disk_file_data.digest
+            };
+
+            // If the patched file is this program, don't try to overwrite it
+            // while it is running. Instead, save it as a different file name
+            // and move it later.
             if is_self {
-                // Make sure the file is exectuable on unixlike systems
-                set_executable(&file_to_write)?;
-                worker.updated_patcher = Some(file_to_write);
+                file_to_write = worker.get_self_aecoupdate_path()?;
+            }
+
+            if !file_matches {
+                println!("Updating {net_file} -> {:?}", &file_to_write);
+                let file_bytes = download::patch(worker, net_file)?;
+                std::fs::write(&file_to_write, file_bytes)?;
+                // If we got the file successfully, and it is a replacement for
+                // this program, save the path to the new one for later so we
+                // can switch to it.
+                if is_self {
+                    // Make sure the file is exectuable on unixlike systems
+                    set_executable(&file_to_write)?;
+                    worker.updated_patcher = Some(file_to_write);
+                }
             }
         }
     }
