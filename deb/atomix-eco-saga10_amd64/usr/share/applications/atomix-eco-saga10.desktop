@@ -2,6 +2,7 @@
 Comment=Atomix Emil Chronicle Online
 Exec=/bin/bash atomix-eco-saga10
 Icon=atomix-eco-saga10
+StartupWMClass=aeco-launcher
 Name=Atomix Emil Chronicle Online Saga 10
 Terminal=false
 Type=Application
