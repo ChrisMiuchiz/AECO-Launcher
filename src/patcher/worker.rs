@@ -155,9 +155,11 @@ impl PatchWorker {
                     }
                 }
                 GUIMessage::Play => {
+                    self.send_download("Starting game...".to_string(), 1.);
                     match self.start_game() {
                         Ok(_) => {
                             // The game is running and we can exit
+                            self.send_download("Game has started!".to_string(), 1.);
                             std::thread::sleep(std::time::Duration::from_secs(3));
                             return;
                         }
