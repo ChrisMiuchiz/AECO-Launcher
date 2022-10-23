@@ -1,4 +1,4 @@
-pub const PATCH_SERVER: &str = "http://127.0.0.1:8000/";
+pub const PATCH_SERVER: &str = "https://ecocp.atomixro.com/ecopatch/saga10/";
 pub const BASE_DIR: &str = "base/";
 pub const BASE_ZIP: &str = "saga10.zip";
 pub const META_DIR: &str = "meta/";
