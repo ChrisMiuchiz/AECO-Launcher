@@ -1,6 +1,6 @@
 [package]
 name = "aeco-launcher"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 build = "src/build.rs"
 
@@ -8,8 +8,8 @@ build = "src/build.rs"
 subprocess = "0.2.9"
 
 [dependencies]
-aeco-patch-config = { git = "https://github.com/ChrisMiuchiz/AECO-Patch-Config.git" }
-aeco-archive = { git = "https://github.com/ChrisMiuchiz/AECO-Archive.git" }
+aeco-patch-config = { git = "https://github.com/ChrisMiuchiz/AECO-Patch-Config.git", rev = "3a4513e" }
+aeco-archive = { git = "https://github.com/ChrisMiuchiz/AECO-Archive.git", rev = "99e7c38" }
 byte-unit = "4.0.14"
 eframe = "0.19.0"
 futures-util = "0.3.24"
